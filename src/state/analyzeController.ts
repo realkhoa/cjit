@@ -23,8 +23,20 @@ export class DebouncedAnalyzer {
   private controller: AbortController | null = null;
   private pendingCode: string | null = null;
   private disposed = false;
+  private delayMs: number;
 
-  constructor(private readonly options: DebouncedAnalyzerOptions) {}
+  constructor(private readonly options: DebouncedAnalyzerOptions) {
+    this.delayMs = Math.max(0, options.delayMs);
+  }
+
+  /** Changes the delay for future passes; a scheduled pass keeps its own timer. */
+  setDelay(delayMs: number): void {
+    this.delayMs = Number.isFinite(delayMs) ? Math.max(0, Math.round(delayMs)) : this.delayMs;
+  }
+
+  get delay(): number {
+    return this.delayMs;
+  }
 
   get busy(): boolean {
     return this.controller !== null;
@@ -45,7 +57,7 @@ export class DebouncedAnalyzer {
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.flush();
-    }, this.options.delayMs);
+    }, this.delayMs);
   }
 
   /** Runs the pending analysis immediately, if there is one. */

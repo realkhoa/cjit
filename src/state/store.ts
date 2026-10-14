@@ -14,11 +14,22 @@ import {
 } from '@/state/fileStore';
 import type { FileLanguage, FilesWorkspace, StoredFile } from '@/state/fileStore';
 import {
+  clearFilesWorkspace,
   loadFilesWorkspace,
   loadWorkspace,
   scheduleFilesSave,
   scheduleWorkspaceSave,
 } from '@/state/persistence';
+import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
+import type { EditorSettings } from '@/state/settings';
+import {
+  decodeShare,
+  encodeShare,
+  readShareFromHash,
+  shareUrlFor,
+  toSharePayload,
+  workspaceFromShare,
+} from '@/state/share';
 import {
   DEFAULT_BOTTOM_PERCENT,
   DEFAULT_EXPLORER_WIDTH,
@@ -94,8 +105,8 @@ export interface AppState {
   readonly bottomPercent: number;
   readonly explorerWidth: number;
   readonly cursor: CursorInfo;
-  /** Show inline value overlays after each executed line. */
-  readonly inlineValues: boolean;
+  /** Editor and analysis preferences, persisted with the workspace. */
+  readonly settings: EditorSettings;
 
   setCodeFromEditor(code: string): void;
   loadExample(path: string, language: FileLanguage, code: string): void;
@@ -103,12 +114,19 @@ export interface AppState {
   openFile(id: string): void;
   renameActiveFile(path: string): RenameOutcome;
   deleteActiveFile(): void;
+  resetWorkspace(): void;
+  shareLink(): Promise<{ ok: boolean; url?: string; error?: string }>;
+  /** Loads a workspace out of the URL fragment; true when one was found. */
+  loadSharedWorkspace(): Promise<boolean>;
   setStdin(value: string): void;
   setConsoleTab(tab: ConsoleTab): void;
   appendOutput(kind: OutputKind, text: string): void;
   clearOutput(): void;
   setCursor(cursor: CursorInfo): void;
   toggleInlineValues(): void;
+  setFontSize(size: number): void;
+  setDebounceMs(value: number): void;
+  toggleMinimap(): void;
   setEngineId(id: EngineId): void;
   setRightPercent(percent: number): void;
   setBottomPercent(percent: number): void;
@@ -188,7 +206,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     MAX_EXPLORER_WIDTH,
   ),
   cursor: { line: 1, column: 1, selected: 0 },
-  inlineValues: true,
+  settings: settingsFrom(persisted),
 
   setCodeFromEditor(code) {
     const { files, activeFileId } = get();
@@ -270,6 +288,93 @@ export const useAppStore = create<AppState>()((set, get) => ({
     analyzer.schedule(get().code);
   },
 
+  resetWorkspace() {
+    // Forget what the browser stored as well, or a reload would bring it back.
+    clearFilesWorkspace();
+
+    const fresh = initialWorkspace(nextFileId(), Date.now(), {
+      path: DEFAULT_EXAMPLE.path,
+      code: DEFAULT_EXAMPLE.code,
+    });
+    set((state) => ({
+      files: fresh.files,
+      activeFileId: fresh.activeId,
+      ...derived(fresh.files, fresh.activeId),
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', '> Workspace reset to the default example')],
+      consoleTab: 'output',
+    }));
+    analyzer.schedule(get().code);
+  },
+
+  async shareLink() {
+    const { files, activeFileId } = get();
+    const encoded = await encodeShare(toSharePayload({ files, activeId: activeFileId }));
+
+    const base =
+      typeof window === 'undefined'
+        ? 'https://example.invalid/'
+        : `${window.location.origin}${window.location.pathname}`;
+    const url = shareUrlFor(base, encoded);
+
+    // A URL longer than this is not pasteable anywhere useful; say so instead of
+    // handing over a link that will be truncated.
+    if (url.length > 60_000) {
+      get().appendOutput(
+        'system',
+        `> Link chia sẻ quá dài (${url.length.toLocaleString()} ký tự) — chia sẻ ít file hơn hoặc dùng file ngắn hơn`,
+      );
+      return { ok: false, error: 'link too long', url };
+    }
+
+    let copied = false;
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+
+    get().appendOutput(
+      'system',
+      copied
+        ? `> Đã copy link chia sẻ (${url.length.toLocaleString()} ký tự)`
+        : `> Link chia sẻ (copy tay): ${url}`,
+    );
+    return { ok: true, url };
+  },
+
+  async loadSharedWorkspace() {
+    if (typeof window === 'undefined') return false;
+
+    const encoded = readShareFromHash(window.location.hash);
+    if (!encoded) return false;
+
+    const payload = await decodeShare(encoded);
+    if (!payload) {
+      get().appendOutput('stderr', '> Link chia sẻ không đọc được (hỏng hoặc quá lớn)');
+      return false;
+    }
+
+    const workspace = workspaceFromShare(
+      payload,
+      (index) => `shared-${Date.now().toString(36)}-${index}`,
+      Date.now(),
+    );
+    set((state) => ({
+      files: workspace.files,
+      activeFileId: workspace.activeId,
+      ...derived(workspace.files, workspace.activeId),
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', `> Đã nạp ${workspace.files.length} file từ link chia sẻ`)],
+      consoleTab: 'output',
+    }));
+    analyzer.schedule(get().code);
+    return true;
+  },
+
   setStdin(value) {
     set({ stdin: value });
   },
@@ -292,7 +397,23 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   toggleInlineValues() {
-    set((state) => ({ inlineValues: !state.inlineValues }));
+    set((state) => ({
+      settings: { ...state.settings, inlineValues: !state.settings.inlineValues },
+    }));
+  },
+
+  setFontSize(size) {
+    set((state) => ({ settings: { ...state.settings, fontSize: clampFontSize(size) } }));
+  },
+
+  setDebounceMs(value) {
+    const debounceMs = clampDebounce(value);
+    analyzer.setDelay(debounceMs);
+    set((state) => ({ settings: { ...state.settings, debounceMs } }));
+  },
+
+  toggleMinimap() {
+    set((state) => ({ settings: { ...state.settings, minimap: !state.settings.minimap } }));
   },
 
   setEngineId(id) {
@@ -452,15 +573,20 @@ useAppStore.subscribe((state, previous) => {
     state.stdin !== previous.stdin ||
     state.rightPercent !== previous.rightPercent ||
     state.bottomPercent !== previous.bottomPercent ||
-    state.explorerWidth !== previous.explorerWidth
+    state.explorerWidth !== previous.explorerWidth ||
+    state.settings !== previous.settings
   ) {
-    // v1 now only carries the small layout/stdin state; the code lives in v2.
+    // v1 now only carries layout, stdin and settings; the code lives in v2.
     scheduleWorkspaceSave({
       version: 1,
       stdin: state.stdin,
       rightPercent: state.rightPercent,
       bottomPercent: state.bottomPercent,
       explorerWidth: state.explorerWidth,
+      fontSize: state.settings.fontSize,
+      debounceMs: state.settings.debounceMs,
+      minimap: state.settings.minimap,
+      inlineValues: state.settings.inlineValues,
     });
   }
 });

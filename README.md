@@ -18,8 +18,21 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | M3 | Watch: giá trị theo **dòng con trỏ**, **timeline scrub**, highlight giá trị đổi, **modal từng iteration** | ✅ xong |
 | M4 | Execution chạy trong **Web Worker** (UI không bao giờ đơ), cancel = terminate worker | ✅ xong |
 | M5 | IntelliSense sâu: signature help, go-to-definition (kể cả nhảy vào header), outline + breadcrumb theo symbol | ✅ xong |
-| M6 | **Quản lý file + lưu trong browser** ✅ · còn: share URL, settings, command palette, size tuning | 🟡 một phần |
+| M6 | **Share link** ✅ · **Settings** ✅ · **Command palette** ✅ · workspace nhiều file ✅ · còn: size tuning | 🟡 gần xong |
 | M7 | `clang + lld` WASM: build C++ thật với libc++/STL | ⏳ |
+| **Mobile** | UI cho mobile — **chỉ làm sau khi mọi tính năng xong** | ⏳ (đã xếp cuối) |
+
+### M6: chia sẻ, cấu hình, command palette
+
+- **Share link**: nút *Share link* mã hoá **toàn bộ workspace** (mọi file) vào **URL fragment** — fragment không
+  được gửi lên server nên app vẫn thuần client. Payload được **deflate-raw** rồi **base64url** (marker `1`/`0` cho
+  biết có nén hay không); mở link là workspace được nạp lại. Mọi thứ đến từ link được coi là **không tin cậy**:
+  tên file phải hợp lệ, tối đa 50 file và 512KB code, link >60k ký tự thì từ chối kèm lý do.
+- **Settings** (⚙ trên toolbar): cỡ chữ editor, debounce của pane Watch (đổi là áp dụng ngay), minimap, inline
+  values, và **Reset workspace** (có xác nhận). Tất cả được lưu cùng workspace.
+- **Command palette**: `Ctrl+Shift+P` (hoặc `F1`) do Monaco cung cấp; các lệnh của app được đăng ký dưới dạng
+  *editor actions* nên có mặt trong đó: Run (F5), Stop, New file, Toggle inline values, Copy share link,
+  Reset workspace.
 
 ### Workspace nhiều file, lưu trong browser
 

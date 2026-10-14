@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { ENGINE_ORDER, getEngine } from '@/engine/registry';
 import type { EngineId } from '@/engine/types';
 import { EXAMPLES } from '@/examples/sample';
 import { ANALYSIS_DEBOUNCE_MS, useAppStore } from '@/state/store';
+import { SettingsDialog } from '@/ui/SettingsDialog';
 
 export function Toolbar() {
   const runState = useAppStore((state) => state.runState);
@@ -11,11 +13,22 @@ export function Toolbar() {
   const clearOutput = useAppStore((state) => state.clearOutput);
   const loadExample = useAppStore((state) => state.loadExample);
   const setEngineId = useAppStore((state) => state.setEngineId);
-  const inlineValues = useAppStore((state) => state.inlineValues);
+  const inlineValues = useAppStore((state) => state.settings.inlineValues);
   const toggleInlineValues = useAppStore((state) => state.toggleInlineValues);
+  const shareLink = useAppStore((state) => state.shareLink);
   const path = useAppStore((state) => state.path);
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shareState, setShareState] = useState<'idle' | 'copied' | 'failed'>('idle');
+
   const running = runState === 'running';
+
+  const handleShare = (): void => {
+    void shareLink().then((outcome) => {
+      setShareState(outcome.ok ? 'copied' : 'failed');
+      setTimeout(() => setShareState('idle'), 2500);
+    });
+  };
 
   return (
     <div className="toolbar">
@@ -98,6 +111,27 @@ export function Toolbar() {
       >
         Inline values
       </button>
+
+      <button
+        type="button"
+        className={shareState === 'copied' ? 'btn btn--toggled' : 'btn'}
+        onClick={handleShare}
+        title="Copy link chia sẻ chứa toàn bộ workspace (mã hoá trong URL, không gửi lên server)"
+      >
+        {shareState === 'copied' ? 'Link copied' : shareState === 'failed' ? 'Link too long' : 'Share link'}
+      </button>
+
+      <button
+        type="button"
+        className={settingsOpen ? 'btn btn--toggled' : 'btn'}
+        onClick={() => setSettingsOpen((open) => !open)}
+        aria-expanded={settingsOpen}
+        title="Settings (font, debounce, minimap, reset workspace)"
+      >
+        ⚙ Settings
+      </button>
+
+      {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
 
       <div className="titlebar__spacer" />
 

@@ -23,7 +23,9 @@ export function EditorPane() {
   const path = useAppStore((state) => state.path);
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
   const watch = useAppStore((state) => state.watch);
-  const inlineValuesEnabled = useAppStore((state) => state.inlineValues);
+  const inlineValuesEnabled = useAppStore((state) => state.settings.inlineValues);
+  const fontSize = useAppStore((state) => state.settings.fontSize);
+  const minimap = useAppStore((state) => state.settings.minimap);
   const cursorLine = useAppStore((state) => state.cursor.line);
   const files = useAppStore((state) => state.files);
   const activeFileId = useAppStore((state) => state.activeFileId);
@@ -97,12 +99,40 @@ export function EditorPane() {
       });
     });
 
-    // VS/VS Code muscle memory: F5 runs, Shift+F5 stops.
-    editor.addCommand(monaco.KeyCode.F5, () => {
-      void useAppStore.getState().run();
+    // Editor actions also appear in Monaco's own command palette (F1 /
+    // Ctrl+Shift+P), which is why they are registered as actions and not as bare
+    // key bindings.
+    editor.addAction({
+      id: 'cjit.run',
+      label: 'C/C++ Studio: Run program',
+      keybindings: [monaco.KeyCode.F5],
+      run: () => void useAppStore.getState().run(),
     });
-    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.F5, () => {
-      useAppStore.getState().stop();
+    editor.addAction({
+      id: 'cjit.stop',
+      label: 'C/C++ Studio: Stop program',
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F5],
+      run: () => useAppStore.getState().stop(),
+    });
+    editor.addAction({
+      id: 'cjit.newFile',
+      label: 'C/C++ Studio: New file',
+      run: () => useAppStore.getState().createFile(),
+    });
+    editor.addAction({
+      id: 'cjit.inlineValues',
+      label: 'C/C++ Studio: Toggle inline values',
+      run: () => useAppStore.getState().toggleInlineValues(),
+    });
+    editor.addAction({
+      id: 'cjit.shareLink',
+      label: 'C/C++ Studio: Copy share link',
+      run: () => void useAppStore.getState().shareLink(),
+    });
+    editor.addAction({
+      id: 'cjit.resetWorkspace',
+      label: 'C/C++ Studio: Reset workspace to the default example',
+      run: () => useAppStore.getState().resetWorkspace(),
     });
 
     editor.focus();
@@ -117,6 +147,14 @@ export function EditorPane() {
       editorRef.current = null;
     };
   }, []);
+
+  // Settings that the editor itself applies.
+  useEffect(() => {
+    editorRef.current?.updateOptions({
+      fontSize,
+      minimap: { enabled: minimap, renderCharacters: false, maxColumn: 90 },
+    });
+  }, [fontSize, minimap]);
 
   useEffect(() => {
     const editor = editorRef.current;

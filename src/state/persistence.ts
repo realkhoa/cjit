@@ -19,6 +19,10 @@ export interface PersistedWorkspace {
   readonly rightPercent?: number;
   readonly bottomPercent?: number;
   readonly explorerWidth?: number;
+  readonly fontSize?: number;
+  readonly debounceMs?: number;
+  readonly minimap?: boolean;
+  readonly inlineValues?: boolean;
 }
 
 export interface PersistedFiles {
