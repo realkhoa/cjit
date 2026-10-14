@@ -76,14 +76,22 @@ export interface LineState {
 }
 
 /**
- * One scrubbable moment in the program's life: the full variable state captured
- * when `name` was declared or assigned on `line`.
+ * One scrubbable moment in the program's life.
+ *
+ * `assignment` entries are captured when a variable is declared or assigned;
+ * `loop-iteration` entries are captured when one pass of a loop finishes, and
+ * carry the iteration number, the nesting depth and the lines that pass ran, so
+ * the UI can answer "show me each iteration of the loop my caret is in".
  */
 export interface WatchHistoryEntry {
+  readonly kind: 'assignment' | 'loop-iteration';
   readonly step: number;
   readonly line: number;
   readonly scope: string;
   readonly name: string;
+  readonly iteration?: number;
+  readonly depth?: number;
+  readonly lines?: readonly number[];
   readonly vars: readonly VarNode[];
 }
 

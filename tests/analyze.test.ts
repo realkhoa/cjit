@@ -6,6 +6,8 @@ import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP } from '@/examples/sample';
 import { getPublishedAnalysis } from '@/lang/analysisCache';
 import { analyzeSource } from '@/lang/analyze';
 import { flushAnalysis, useAppStore } from '@/state/store';
+import { inlineDecorationSpecs } from '@/ui/inlineValues';
+import { buildIterationTable } from '@/ui/iterationTable';
 
 const CLEAN_C = [
   '#include <stdio.h>',
@@ -124,8 +126,7 @@ describe('fast engine: honest snapshots and runs', () => {
     expect(outcome.exitCode).toBe(42);
   });
 
-  it('reports a build failure on stderr when the code does not parse', async () => {
-    const engine = createFastEngine();
+  it('reports a build failure on stderr when the code does not parse', async () => {    const engine = createFastEngine();
     const stderr: string[] = [];
     const sink: RunSink = {
       stdout: () => undefined,
@@ -142,6 +143,38 @@ describe('fast engine: honest snapshots and runs', () => {
 
     expect(outcome.status).toBe('compile-error');
     expect(stderr.join('')).toContain('Build failed');
+  });
+});
+
+describe('engine output feeds the editor overlays', () => {
+  it('produces inline overlays and loop iterations for the default C++ sample', async () => {
+    const engine = createFastEngine();
+    const snapshot = await engine.watch(
+      { code: SAMPLE_MAIN_CPP, file: 'main.cpp' },
+      new AbortController().signal,
+    );
+
+    expect(snapshot.status).toBe('ok');
+    expect(snapshot.lineStates.length).toBeGreaterThan(0);
+
+    const specs = inlineDecorationSpecs(snapshot, () => 40);
+    expect(specs.length).toBeGreaterThan(0);
+    for (const spec of specs) {
+      // Monaco renders `after` at the end of the range: it must be the line end.
+      expect(spec.endColumn).toBe(41);
+      // ...and the injected text must be a single line.
+      expect(spec.content).not.toMatch(/[\r\n]/);
+      expect(spec.content).toContain('//');
+    }
+
+    // The sample's range-based for runs over 8 elements, recorded per pass.
+    const passes = snapshot.history.filter((entry) => entry.kind === 'loop-iteration');
+    expect(passes.length).toBeGreaterThanOrEqual(8);
+
+    // And a caret on the loop body finds exactly that loop's iterations.
+    const table = buildIterationTable(snapshot.history, 9);
+    expect(table.rows.length).toBe(8);
+    expect(table.rows.map((row) => row.globalIteration)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });
 

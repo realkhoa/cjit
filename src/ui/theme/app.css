@@ -167,9 +167,15 @@ button {
 
 /* Inline value overlay rendered by Monaco after an executed line. */
 .cjit-inline-value {
-  color: var(--vs-text-muted);
+  color: var(--vs-text-dim);
   font-style: italic;
   opacity: 0.95;
+}
+
+/* A line that changed nothing: show what was in scope, dimmer. */
+.cjit-inline-value--scope {
+  color: var(--vs-text-muted);
+  opacity: 0.8;
 }
 
 .chip {

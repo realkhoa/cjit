@@ -4,7 +4,7 @@ import { registerKeywordCompletions, registerSymbolCompletions } from '@/editor/
 import { monaco } from '@/editor/monacoSetup';
 import { bindEditor } from '@/editor/navigation';
 import { useAppStore } from '@/state/store';
-import { inlineValuesFor, overlayText } from '@/ui/inlineValues';
+import { inlineDecorationSpecs } from '@/ui/inlineValues';
 import { EDITOR_THEME_DARK } from '@/ui/theme/monacoTheme';
 
 type Editor = Monaco.editor.IStandaloneCodeEditor;
@@ -117,6 +117,12 @@ export function EditorPane() {
     if (editor.getValue() !== code) editor.setValue(code);
   }, [code, codeRevision]);
 
+  // Clear while the user is typing: a decoration anchored to text that moved would
+  // otherwise show a value for the wrong line until the next pass lands.
+  useEffect(() => {
+    decorationsRef.current?.clear();
+  }, [code]);
+
   // Inline value overlays: `// total = 6` rendered after each executed line.
   // They come from the interpreter's per-line states, so a line only shows values
   // if it actually ran, and only values that line produced.
@@ -137,13 +143,10 @@ export function EditorPane() {
     }
 
     collection.set(
-      inlineValuesFor(watch).map((overlay) => ({
-        range: new monaco.Range(overlay.line, 1, overlay.line, 1),
+      inlineDecorationSpecs(watch, (line) => model.getLineLength(line)).map((spec) => ({
+        range: new monaco.Range(spec.line, spec.startColumn, spec.line, spec.endColumn),
         options: {
-          after: {
-            content: `   ${overlayText(overlay)}`,
-            inlineClassName: 'cjit-inline-value',
-          },
+          after: { content: spec.content, inlineClassName: spec.className },
           stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
           description: 'cjit inline value',
         },

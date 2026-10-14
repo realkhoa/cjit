@@ -291,6 +291,17 @@ export function flushAnalysis(): Promise<void> {
   return analyzer.flush();
 }
 
+/**
+ * Runs the first realtime pass immediately.
+ *
+ * Without this the watch pane, the inline overlays and the diagnostics stay empty
+ * until the user happens to type something - which looks broken on a fresh page.
+ */
+export async function startInitialAnalysis(): Promise<void> {
+  analyzer.schedule(useAppStore.getState().code);
+  await analyzer.flush();
+}
+
 export function cancelAnalysis(): void {
   analyzer.cancel();
 }

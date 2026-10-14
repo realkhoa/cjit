@@ -17,20 +17,24 @@ export interface IterationsDialogProps {
 
 export function IterationsDialog({ line, history, onSelect, onClose }: IterationsDialogProps) {
   const table = buildIterationTable(history, line);
+  const title =
+    table.loopLine === null
+      ? `Line ${line} is not inside a loop`
+      : `Loop on line ${table.loopLine} · ${table.rows.length} iteration${
+          table.rows.length === 1 ? '' : 's'
+        }${table.depth > 1 ? ` · nested depth ${table.depth}` : ''}`;
 
   return (
     <div
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={`Iterations of line ${line}`}
+      aria-label={`Iterations of the loop on line ${table.loopLine ?? line}`}
       onClick={onClose}
     >
       <div className="modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal__header">
-          <span className="modal__title">
-            Line {line} · {table.rows.length} iteration{table.rows.length === 1 ? '' : 's'}
-          </span>
+          <span className="modal__title">{title}</span>
           <button type="button" className="btn" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -38,12 +42,15 @@ export function IterationsDialog({ line, history, onSelect, onClose }: Iteration
 
         <div className="modal__body">
           {table.rows.length === 0 ? (
-            <div className="empty-state">Dòng này chưa chạy lần nào.</div>
+            <div className="empty-state">
+              Dòng này không nằm trong vòng lặp nào đã chạy, hoặc vòng lặp chưa chạy lần nào.
+            </div>
           ) : (
             <table className="watch-table">
               <thead>
                 <tr>
-                  <th scope="col">#</th>
+                  <th scope="col">iter</th>
+                  <th scope="col">global</th>
                   <th scope="col">step</th>
                   {table.columns.map((column) => (
                     <th key={column} scope="col">
@@ -61,6 +68,9 @@ export function IterationsDialog({ line, history, onSelect, onClose }: Iteration
                     onClick={() => onSelect(row.historyIndex)}
                   >
                     <td className="watch-table__name">{row.iteration}</td>
+                    <td className="watch-table__scope">
+                      {row.globalIteration}/{table.globalTotal}
+                    </td>
                     <td className="watch-table__scope">{row.step}</td>
                     {row.cells.map((cell) => (
                       <td
@@ -82,7 +92,8 @@ export function IterationsDialog({ line, history, onSelect, onClose }: Iteration
         </div>
 
         <div className="modal__footer">
-          Bấm một dòng để xem state của iteration đó trong pane Watch
+          Mỗi dòng là một vòng lặp (state sau khi vòng đó chạy xong) · cột <code>global</code> là thứ tự
+          vòng lặp trong toàn bộ lần chạy · bấm một dòng để xem trong pane Watch
           {table.truncated ? ' · một số biến không hiển thị hết' : ''}
         </div>
       </div>

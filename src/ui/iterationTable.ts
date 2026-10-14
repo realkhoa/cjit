@@ -1,12 +1,15 @@
 import type { WatchHistoryEntry } from '@/engine/types';
 
 /**
- * Rows for the "every iteration of this line" dialog.
+ * Rows for the "every iteration of this loop" dialog.
  *
- * A loop body records one history entry per iteration, so the entries for a line
- * are exactly the iterations of that line. Rendering them as a table - one row
- * per iteration, one column per variable - is what makes the data readable
- * instead of a wall of text.
+ * The interpreter records one entry per *loop pass*, not per line, so a row here
+ * is a whole iteration of a `for`/`while`/range-for loop - with the state that
+ * pass left behind - while `globalIteration` keeps the position of that pass in
+ * the run as a whole.
+ *
+ * When loops nest, the keyboard caret belongs to the innermost loop that touched
+ * its line: that is what `depth` is for.
  */
 
 export interface IterationCell {
@@ -17,8 +20,10 @@ export interface IterationCell {
 }
 
 export interface IterationRow {
-  /** 1-based iteration number for the line. */
+  /** 1-based iteration number of its own loop. */
   readonly iteration: number;
+  /** 1-based ordinal among every loop iteration recorded in the run. */
+  readonly globalIteration: number;
   readonly step: number;
   /** Index into the snapshot history, so a click can jump there. */
   readonly historyIndex: number;
@@ -26,31 +31,65 @@ export interface IterationRow {
 }
 
 export interface IterationTable {
-  readonly line: number;
+  /** Line of the loop header, or null when the caret is not inside a loop. */
+  readonly loopLine: number | null;
+  /** Nesting depth of that loop (1 = outermost). */
+  readonly depth: number;
   readonly columns: readonly string[];
   readonly rows: readonly IterationRow[];
-  /** True when more variables existed than the column cap allows. */
   readonly truncated: boolean;
+  /** Total loop iterations recorded in the whole run. */
+  readonly globalTotal: number;
 }
 
 const MAX_COLUMNS = 8;
 
 export function buildIterationTable(
   history: readonly WatchHistoryEntry[],
-  line: number,
+  cursorLine: number,
 ): IterationTable {
-  // Pass 1: which entries belong to this line, and which columns exist at all.
-  // Columns must be known before any row is built, otherwise an early row would
-  // be one cell short once a variable appears in a later iteration.
-  const matching: Array<{ entry: WatchHistoryEntry; historyIndex: number }> = [];
+  // Global ordinals are assigned over *every* loop iteration, so the dialog can
+  // show where this pass sits in the whole execution.
+  const globalOrdinal = new Map<number, number>();
+  let globalTotal = 0;
+  history.forEach((entry, index) => {
+    if (entry.kind !== 'loop-iteration') return;
+    globalTotal += 1;
+    globalOrdinal.set(index, globalTotal);
+  });
+
+  // Which loop iterations touched the caret's line?
+  const touching: Array<{ entry: WatchHistoryEntry; index: number }> = [];
+  history.forEach((entry, index) => {
+    if (entry.kind !== 'loop-iteration') return;
+    const touches =
+      entry.line === cursorLine || (entry.lines?.includes(cursorLine) ?? false);
+    if (touches) touching.push({ entry, index });
+  });
+
+  if (touching.length === 0) {
+    return {
+      loopLine: null,
+      depth: 0,
+      columns: [],
+      rows: [],
+      truncated: false,
+      globalTotal,
+    };
+  }
+
+  // Innermost loop wins: a line inside a nested loop belongs to both loops.
+  const maxDepth = Math.max(...touching.map((item) => item.entry.depth ?? 1));
+  const innermost = touching.filter((item) => (item.entry.depth ?? 1) === maxDepth);
+  const loopLine = innermost[0]?.entry.line ?? cursorLine;
+  const selected = innermost.filter((item) => item.entry.line === loopLine);
+
+  // Columns first, then rows: an early iteration must not end up short when a
+  // variable only appears in a later one.
   const columns: string[] = [];
   const seen = new Set<string>();
   let truncated = false;
-
-  history.forEach((entry, historyIndex) => {
-    if (entry.line !== line) return;
-    matching.push({ entry, historyIndex });
-
+  for (const { entry } of selected) {
     for (const variable of entry.vars) {
       if (seen.has(variable.name)) continue;
       if (columns.length >= MAX_COLUMNS) {
@@ -60,11 +99,10 @@ export function buildIterationTable(
       seen.add(variable.name);
       columns.push(variable.name);
     }
-  });
+  }
 
-  // Pass 2: one row per iteration, padded to the full column set.
   const rows: IterationRow[] = [];
-  for (const { entry, historyIndex } of matching) {
+  for (const { entry, index } of selected) {
     const previous = rows[rows.length - 1];
     const previousValues = new Map(previous?.cells.map((cell) => [cell.name, cell.value]) ?? []);
 
@@ -79,13 +117,19 @@ export function buildIterationTable(
       };
     });
 
-    rows.push({ iteration: rows.length + 1, step: entry.step, historyIndex, cells });
+    rows.push({
+      iteration: entry.iteration ?? rows.length + 1,
+      globalIteration: globalOrdinal.get(index) ?? 0,
+      step: entry.step,
+      historyIndex: index,
+      cells,
+    });
   }
 
-  return { line, columns, rows, truncated };
+  return { loopLine, depth: maxDepth, columns, rows, truncated, globalTotal };
 }
 
-/** True when a line holds more than one recorded iteration (i.e. it is in a loop). */
-export function isLoopLine(table: IterationTable): boolean {
-  return table.rows.length > 1;
+/** True when the caret line belongs to a loop that ran at least once. */
+export function hasIterations(table: IterationTable): boolean {
+  return table.rows.length > 0;
 }

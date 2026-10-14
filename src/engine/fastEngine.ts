@@ -141,10 +141,14 @@ export function buildWatchSnapshot(
       vars: state.vars.map(toVarNode),
     })),
     history: result.history.map((entry) => ({
+      kind: entry.kind,
       step: entry.step,
       line: entry.line,
       scope: entry.scope,
       name: entry.name,
+      ...(entry.iteration === undefined ? {} : { iteration: entry.iteration }),
+      ...(entry.depth === undefined ? {} : { depth: entry.depth }),
+      ...(entry.lines === undefined ? {} : { lines: entry.lines }),
       vars: entry.vars.map(toVarNode),
     })),
   };

@@ -467,3 +467,106 @@ describe('interpreter: execution history (timeline scrubber)', () => {
     expect(result.history).toEqual([]);
   });
 });
+
+describe('interpreter: loop iterations (one entry per loop pass)', () => {
+  const LOOP = [
+    'int main(void) {', //                              1
+    '    int total = 0;', //                            2
+    '    for (int i = 0; i < 3; i++) {', //             3
+    '        total += i;', //                           4
+    '    }', //                                         5
+    '    return 0;', //                                 6
+    '}', //                                             7
+  ].join('\n');
+
+  it('records one entry per pass, numbered per loop, with the state it left', () => {
+    const result = run(LOOP);
+    const passes = result.history.filter((entry) => entry.kind === 'loop-iteration');
+
+    expect(passes).toHaveLength(3);
+    expect(passes.map((entry) => entry.iteration)).toEqual([1, 2, 3]);
+    expect(passes.every((entry) => entry.line === 3)).toBe(true);
+    expect(passes.every((entry) => entry.depth === 1)).toBe(true);
+
+    // Captured after the increment, so the counter has already advanced.
+    expect(passes.map((entry) => entry.vars.find((item) => item.name === 'i')?.value)).toEqual([
+      '1',
+      '2',
+      '3',
+    ]);
+    expect(passes.map((entry) => entry.vars.find((item) => item.name === 'total')?.value)).toEqual([
+      '0',
+      '1',
+      '3',
+    ]);
+
+    // The lines the pass ran, so a caret inside the body finds this loop.
+    expect(passes[0]?.lines).toEqual(expect.arrayContaining([3, 4]));
+  });
+
+  it('numbers nested loops independently and records their depth', () => {
+    const source = [
+      'int main(void) {', //                                    1
+      '    int count = 0;', //                                  2
+      '    for (int i = 0; i < 2; i++) {', //                   3
+      '        for (int j = 0; j < 2; j++) {', //               4
+      '            count++;', //                                5
+      '        }', //                                           6
+      '    }', //                                               7
+      '    return 0;', //                                       8
+      '}',
+    ].join('\n');
+    const result = run(source);
+    const passes = result.history.filter((entry) => entry.kind === 'loop-iteration');
+
+    const inner = passes.filter((entry) => entry.depth === 2);
+    const outer = passes.filter((entry) => entry.depth === 1);
+
+    expect(inner).toHaveLength(4);
+    expect(outer).toHaveLength(2);
+    expect(inner.map((entry) => entry.iteration)).toEqual([1, 2, 1, 2]);
+    expect(outer.map((entry) => entry.iteration)).toEqual([1, 2]);
+    // An outer pass shows that it also ran the inner loop's lines.
+    expect(outer[0]?.lines).toEqual(expect.arrayContaining([3, 4, 5]));
+  });
+
+  it('does not record a pass that break cut short', () => {
+    const source = [
+      'int main(void) {',
+      '    for (int i = 0; i < 5; i++) {',
+      '        if (i == 2) break;',
+      '    }',
+      '    return 0;',
+      '}',
+    ].join('\n');
+    const result = run(source);
+
+    // i = 0 and i = 1 finish; the pass that breaks is not a completed iteration.
+    expect(result.history.filter((entry) => entry.kind === 'loop-iteration')).toHaveLength(2);
+  });
+
+  it('records while, do-while and range-based for passes as well', () => {
+    const source = [
+      '#include <vector>',
+      'int main() {',
+      '    int n = 0;',
+      '    while (n < 2) { n++; }',
+      '    do { n--; } while (n > 0);',
+      '    std::vector<int> values{1, 2, 3};',
+      '    int total = 0;',
+      '    for (int v : values) { total += v; }',
+      '    return 0;',
+      '}',
+    ].join('\n');
+    const result = run(source);
+    const byLine = new Map<number, number>();
+    for (const entry of result.history) {
+      if (entry.kind !== 'loop-iteration') continue;
+      byLine.set(entry.line, (byLine.get(entry.line) ?? 0) + 1);
+    }
+
+    expect(byLine.get(4)).toBe(2); // while
+    expect(byLine.get(5)).toBe(2); // do-while
+    expect(byLine.get(8)).toBe(3); // range-based for
+  });
+});

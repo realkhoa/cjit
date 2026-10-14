@@ -8,7 +8,7 @@ function variable(name: string, value: string): VarNode {
 }
 
 function historyEntry(step: number, line: number, vars: VarNode[]): WatchHistoryEntry {
-  return { step, line, scope: 'main', name: 'x', vars };
+  return { kind: 'assignment', step, line, scope: 'main', name: 'x', vars };
 }
 
 function snapshot(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
@@ -122,6 +122,29 @@ describe('selectWatchView: timeline mode', () => {
     const view = selectWatchView(snapshot(), { mode: 'timeline', cursorLine: 1, historyIndex: 3 });
     expect(view.line).toBeNull();
     expect(view.label).toContain('no timeline');
+  });
+
+  it('labels a loop iteration by its loop and iteration number', () => {
+    const watch = snapshot({
+      history: [
+        {
+          kind: 'loop-iteration',
+          step: 20,
+          line: 3,
+          scope: 'main',
+          name: '',
+          iteration: 2,
+          depth: 1,
+          lines: [3, 4],
+          vars: [variable('i', '1')],
+        },
+      ],
+    });
+
+    const view = selectWatchView(watch, { mode: 'timeline', cursorLine: 1, historyIndex: 0 });
+    expect(view.label).toContain('iteration 2');
+    expect(view.label).toContain('line 3');
+    expect(view.vars.map((item) => item.value)).toEqual(['1']);
   });
 });
 

@@ -2,7 +2,7 @@ import { Fragment, useState } from 'react';
 import type { VarNode } from '@/engine/types';
 import { ANALYSIS_DEBOUNCE_MS, useAppStore } from '@/state/store';
 import { IterationsDialog } from '@/ui/IterationsDialog';
-import { buildIterationTable, isLoopLine } from '@/ui/iterationTable';
+import { buildIterationTable, hasIterations } from '@/ui/iterationTable';
 import { overallTone, pillClass, watchStatusLabel } from '@/ui/status';
 import { selectWatchView } from '@/ui/watchSelect';
 import type { WatchMode } from '@/ui/watchSelect';
@@ -122,14 +122,15 @@ export function WatchPane() {
           {view.line === null ? 'final' : `Ln ${view.line}`}
         </span>
         <span>{view.label}</span>
-        {isLoopLine(cursorIterations) ? (
+        {hasIterations(cursorIterations) ? (
           <button
             type="button"
             className="chip"
             onClick={() => setIterationsOpen(true)}
-            title="Xem dữ liệu của từng iteration tại dòng này"
+            title="Xem dữ liệu của từng vòng lặp tại dòng này"
           >
-            ⟳ {cursorIterations.rows.length} iterations
+            ⟳ {cursorIterations.rows.length} iteration
+            {cursorIterations.rows.length === 1 ? '' : 's'} · Ln {cursorIterations.loopLine}
           </button>
         ) : null}
         {view.changedCount > 0 ? (

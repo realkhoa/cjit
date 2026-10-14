@@ -85,12 +85,20 @@ export interface LineStateSnapshot {
 }
 
 export interface HistoryEntry {
+  /** An assignment/declaration, or the completion of one loop iteration. */
+  readonly kind: 'assignment' | 'loop-iteration';
   /** Interpreter step at which this state was captured. */
   readonly step: number;
   readonly line: number;
   readonly scope: string;
-  /** The variable whose assignment produced this state, for the scrubber label. */
+  /** The variable whose assignment produced this state ('' for an iteration). */
   readonly name: string;
+  /** 1-based iteration number of its own loop, for `loop-iteration` entries. */
+  readonly iteration?: number;
+  /** Loop nesting depth (1 = outermost), so the innermost loop can be picked. */
+  readonly depth?: number;
+  /** Source lines this iteration executed, used to find the loop at the caret. */
+  readonly lines?: readonly number[];
   readonly vars: readonly WatchVariable[];
 }
 
@@ -352,6 +360,10 @@ class Interpreter {
   private lastStackSnapshot: StackFrameInfo[] = [];
   private readonly history: HistoryEntry[] = [];
   private readonly lineStates = new Map<number, WatchVariable[]>();
+  /** One line-set per active loop iteration (a stack: loops nest). */
+  private readonly iterationLineStack: Array<Set<number>> = [];
+  private readonly iterationCounters = new Map<number, number>();
+  private loopDepth = 0;
   private readonly limits: Required<Omit<ExecuteOptions, 'stdin' | 'onOutput'>>;
   private readonly onOutput: ((chunk: string, stream: 'stdout' | 'stderr') => void) | undefined;
   private startedAt = Date.now();
@@ -724,6 +736,9 @@ class Interpreter {
 
   private executeStatement(statement: Statement): void {
     this.tick();
+    // Remember which lines each active loop iteration touched, so the pane can
+    // find the loop a caret line belongs to.
+    this.trackIterationLine(statement.start.line);
 
     switch (statement.kind) {
       case 'compound': {
@@ -750,37 +765,61 @@ class Interpreter {
         else if (statement.elseBranch) this.executeStatement(statement.elseBranch);
         return;
       case 'while':
+        // Each loop counts its own iterations from 1 (reset per execution, so a
+        // recursive call does not continue the caller's numbering).
+        this.iterationCounters.set(statement.start.offset, 0);
         while (toBoolean(this.evaluate(statement.condition))) {
           this.tick();
+          const lines = this.beginIteration();
+          let breaking = false;
           try {
             this.executeStatement(statement.body);
           } catch (flow) {
             if (flow instanceof ControlFlow) {
-              if (flow.flow === 'break') break;
-              if (flow.flow === 'continue') continue;
-            }
-            throw flow;
-          }
-        }
-        return;
-      case 'do-while':
-        do {
-          this.tick();
-          try {
-            this.executeStatement(statement.body);
-          } catch (flow) {
-            if (flow instanceof ControlFlow) {
-              if (flow.flow === 'break') break;
-              if (flow.flow === 'continue') {
-                // fall through to the condition
-              } else {
+              if (flow.flow === 'break') breaking = true;
+              else if (flow.flow !== 'continue') {
+                this.abortIteration();
                 throw flow;
               }
             } else {
+              this.abortIteration();
               throw flow;
             }
           }
-        } while (toBoolean(this.evaluate(statement.condition)));
+          if (breaking) {
+            this.abortIteration();
+            break;
+          }
+          this.endIteration(statement, lines);
+        }
+        return;
+      case 'do-while':
+        this.iterationCounters.set(statement.start.offset, 0);
+        for (;;) {
+          this.tick();
+          const lines = this.beginIteration();
+          let breaking = false;
+          try {
+            this.executeStatement(statement.body);
+          } catch (flow) {
+            if (flow instanceof ControlFlow) {
+              if (flow.flow === 'break') breaking = true;
+              else if (flow.flow !== 'continue') {
+                this.abortIteration();
+                throw flow;
+              }
+            } else {
+              this.abortIteration();
+              throw flow;
+            }
+          }
+          if (breaking) {
+            this.abortIteration();
+            break;
+          }
+          this.endIteration(statement, lines);
+          if (!toBoolean(this.evaluate(statement.condition))) break;
+        }
         return;
       case 'for':
         this.executeFor(statement);
@@ -862,20 +901,35 @@ class Interpreter {
         }
       }
 
+      this.iterationCounters.set(statement.start.offset, 0);
       for (;;) {
         this.tick();
         if (statement.condition && !toBoolean(this.evaluate(statement.condition))) break;
+
+        const lines = this.beginIteration();
+        let breaking = false;
         try {
           this.executeStatement(statement.body);
         } catch (flow) {
           if (flow instanceof ControlFlow) {
-            if (flow.flow === 'break') break;
-            if (flow.flow !== 'continue') throw flow;
+            if (flow.flow === 'break') breaking = true;
+            else if (flow.flow !== 'continue') {
+              this.abortIteration();
+              throw flow;
+            }
           } else {
+            this.abortIteration();
             throw flow;
           }
         }
+        if (breaking) {
+          this.abortIteration();
+          break;
+        }
+
         if (statement.increment) this.evaluate(statement.increment);
+        // Recorded after the increment: the row shows what the pass left behind.
+        this.endIteration(statement, lines);
       }
     } finally {
       this.popScope();
@@ -2071,21 +2125,34 @@ class Interpreter {
       };
       this.bind(binding);
 
+      this.iterationCounters.set(statement.start.offset, 0);
       for (let index = 0; index < sequence.length; index += 1) {
         this.tick();
         const value = this.load(sequence.element, sequence.data + index * sequence.stride);
         this.store(elementType, address, convertTo(elementType, value));
         this.record(binding, declaration.start);
+
+        const lines = this.beginIteration();
+        let breaking = false;
         try {
           this.executeStatement(statement.body);
         } catch (flow) {
           if (flow instanceof ControlFlow) {
-            if (flow.flow === 'break') break;
-            if (flow.flow !== 'continue') throw flow;
+            if (flow.flow === 'break') breaking = true;
+            else if (flow.flow !== 'continue') {
+              this.abortIteration();
+              throw flow;
+            }
           } else {
+            this.abortIteration();
             throw flow;
           }
         }
+        if (breaking) {
+          this.abortIteration();
+          break;
+        }
+        this.endIteration(statement, lines);
       }
     } finally {
       this.popScope();
@@ -2598,12 +2665,73 @@ class Interpreter {
       return;
     }
     this.history.push({
+      kind: 'assignment',
       step: this.steps,
       line: position.line,
       scope: binding.scopeName,
       name: binding.name,
       vars: this.collectWatch(),
     });
+  }
+
+  // ----------------------------------------------------------- iterations
+
+  /** Starts tracking one loop iteration; returns the line set to fill in. */
+  private beginIteration(): Set<number> | null {
+    if (!this.limits.collectWatch) return null;
+    const lines = new Set<number>();
+    this.iterationLineStack.push(lines);
+    this.loopDepth += 1;
+    return lines;
+  }
+
+  /**
+   * Closes an iteration and records its variable state.
+   *
+   * The state is captured after the body *and* the increment, so a row in the
+   * iteration table shows what that pass left behind - including the advanced
+   * loop counter.
+   */
+  private endIteration(loop: Statement, lines: Set<number> | null): void {
+    if (lines === null) return;
+
+    this.iterationLineStack.pop();
+    this.loopDepth -= 1;
+
+    const key = loop.start.offset;
+    const iteration = (this.iterationCounters.get(key) ?? 0) + 1;
+    this.iterationCounters.set(key, iteration);
+    lines.add(loop.start.line);
+
+    if (this.history.length >= this.limits.maxSnapshots) {
+      this.truncated = true;
+      return;
+    }
+
+    this.history.push({
+      kind: 'loop-iteration',
+      step: this.steps,
+      line: loop.start.line,
+      scope: this.currentScopeName(),
+      name: '',
+      iteration,
+      depth: this.loopDepth + 1,
+      lines: [...lines],
+      vars: this.collectWatch(),
+    });
+  }
+
+  /** Undoes an iteration that ended in break/return/goto: nothing is recorded. */
+  private abortIteration(): void {
+    if (this.iterationLineStack.length === 0) return;
+    this.iterationLineStack.pop();
+    this.loopDepth -= 1;
+  }
+
+  /** Records every line a statement runs on, for loop-iteration lookup. */
+  private trackIterationLine(line: number): void {
+    if (this.iterationLineStack.length === 0) return;
+    for (const lines of this.iterationLineStack) lines.add(line);
   }
 
   private tick(): void {

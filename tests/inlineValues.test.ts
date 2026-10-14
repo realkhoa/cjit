@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { emptyWatch } from '@/engine/types';
 import type { VarNode, WatchSnapshot } from '@/engine/types';
-import { inlineValuesFor, lineStateAt, overlayText } from '@/ui/inlineValues';
+import {
+  inlineDecorationSpecs,
+  inlineValuesFor,
+  lineStateAt,
+  overlayText,
+} from '@/ui/inlineValues';
 
 function variable(name: string, value: string): VarNode {
   return { name, type: 'int', value, scope: 'main', changed: false };
@@ -27,14 +32,40 @@ describe('inlineValuesFor', () => {
     expect(overlays.some((overlay) => overlay.text.includes('a = 1'))).toBe(true);
   });
 
-  it('skips lines whose values did not change', () => {
+  it('marks the line that produced a value differently from an in-scope one', () => {
     const watch = snapshot([
       { line: 2, vars: [variable('a', '1')] },
-      { line: 3, vars: [variable('a', '1')] },
-      { line: 4, vars: [variable('a', '2')] },
+      { line: 3, vars: [variable('a', '1'), variable('b', '2')] },
+      { line: 4, vars: [variable('a', '1'), variable('b', '2')] },
     ]);
 
-    expect(inlineValuesFor(watch).map((overlay) => overlay.line)).toEqual([2, 4]);
+    const overlays = inlineValuesFor(watch);
+
+    expect(overlays.map((overlay) => overlay.line)).toEqual([2, 3, 4]);
+    expect(overlays[1]?.kind).toBe('changed');
+    expect(overlays[1]?.text).toBe('b = 2');
+    // Line 4 changed nothing, so it shows what was in scope there.
+    expect(overlays[2]?.kind).toBe('scope');
+    expect(overlays[2]?.text).toBe('a = 1, b = 2');
+  });
+
+  it('never shows globals as the in-scope fallback', () => {
+    const watch = snapshot([
+      { line: 2, vars: [{ name: 'g', type: 'int', value: '7', scope: 'global', changed: false }] },
+    ]);
+
+    expect(inlineValuesFor(watch)).toEqual([]);
+  });
+
+  it('shows the values in scope on a line that only printed something', () => {
+    const watch = snapshot([
+      { line: 2, vars: [variable('total', '6')] },
+      { line: 3, vars: [variable('total', '6')] },
+    ]);
+
+    const overlay = inlineValuesFor(watch)[1];
+    expect(overlay?.kind).toBe('scope');
+    expect(overlay?.text).toBe('total = 6');
   });
 
   it('caps the names per line and reports how many were hidden', () => {
@@ -69,6 +100,55 @@ describe('inlineValuesFor', () => {
 
   it('produces nothing for a program that never ran', () => {
     expect(inlineValuesFor(emptyWatch())).toEqual([]);
+  });
+
+  it('flattens newlines and tabs, because Monaco injects one line only', () => {
+    const watch = snapshot([{ line: 2, vars: [variable('text', 'a\nb\tc')] }]);
+    const overlay = inlineValuesFor(watch)[0];
+
+    expect(overlay?.text).toBe('text = a\\nb\\tc');
+    expect(overlay?.text).not.toMatch(/[\r\n\t]/);
+  });
+});
+
+describe('inlineDecorationSpecs', () => {
+  it('spans the whole line, so the injected text lands after the code', () => {
+    const watch = snapshot([{ line: 3, vars: [variable('total', '6')] }]);
+
+    const specs = inlineDecorationSpecs(watch, (line) => (line === 3 ? 20 : 0));
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]?.line).toBe(3);
+    expect(specs[0]?.startColumn).toBe(1);
+    // Monaco renders `after` content at the range's end: it must be the line end.
+    expect(specs[0]?.endColumn).toBe(21);
+    expect(specs[0]?.content.trim()).toBe('// total = 6');
+  });
+
+  it('styles produced values differently from in-scope values', () => {
+    const watch = snapshot([
+      { line: 2, vars: [variable('a', '1')] },
+      { line: 3, vars: [variable('a', '1')] },
+      { line: 4, vars: [variable('a', '2')] },
+    ]);
+
+    const specs = inlineDecorationSpecs(watch, () => 10);
+    // The first line has nothing to compare against, so it counts as in-scope.
+    expect(specs[0]?.className).toContain('cjit-inline-value--scope');
+    expect(specs[1]?.className).toContain('cjit-inline-value--scope');
+    // Line 4 changed a, so it is a produced value.
+    expect(specs[2]?.className).toBe('cjit-inline-value');
+  });
+
+  it('never emits a multi-line content string', () => {
+    const watch = snapshot([{ line: 1, vars: [variable('s', 'x\ny')] }]);
+    const specs = inlineDecorationSpecs(watch, () => 5);
+
+    expect(specs[0]?.content).not.toMatch(/[\r\n]/);
+  });
+
+  it('emits nothing when there is nothing to show', () => {
+    expect(inlineDecorationSpecs(emptyWatch(), () => 10)).toEqual([]);
   });
 });
 

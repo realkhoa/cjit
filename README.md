@@ -23,15 +23,19 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 
 ### M3: đọc dữ liệu chương trình
 
-- **Inline value overlay**: sau mỗi dòng đã chạy, Monaco hiện `// total = 6, i = 3` ngay cuối dòng — chỉ
-  hiện **biến mà dòng đó tạo ra/thay đổi**, tối đa 3 tên kèm `(+k)` nếu nhiều hơn, nên dòng vẫn đọc được.
-  Bật/tắt bằng nút **Inline values** trên toolbar. Dòng chưa chạy thì không có overlay (không bịa).
+- **Inline value overlay**: sau mỗi dòng đã chạy, Monaco hiện `// total = 6` ngay cuối dòng. Dòng nào **tạo
+  ra/thay đổi** biến thì hiện đúng biến đó (tối đa 3 tên + `(+k)`); dòng không đổi gì (`printf`, `return`,
+  `if`) thì hiện **biến đang trong scope**, mờ hơn — nên hầu như dòng nào cũng đọc được giá trị, giống inline
+  values của debugger. Bật/tắt bằng nút **Inline values**. Dòng chưa chạy thì không có gì (không bịa).
 - **Watch pane 3 chế độ**: `At cursor` (mặc định, state tại dòng con trỏ), `Timeline` (scrub qua từng lần gán
-  biến, có nhãn `step 20 · total on line 4`), `Final` (state sau khi chạy xong).
+  biến *và* từng vòng lặp, nhãn `iteration 2 of the loop on line 3`), `Final` (state sau khi chạy xong).
 - **Highlight giá trị đổi**: biến vừa đổi (hoặc vừa xuất hiện) được tô đỏ, kèm bộ đếm `n changed`.
-- **Modal từng iteration**: khi dòng con trỏ nằm trong vòng lặp, pane hiện chip `⟳ 3 iterations`; bấm vào mở
-  bảng — mỗi iteration một dòng, mỗi biến một cột, ô đổi giá trị tô đỏ. Bấm một dòng để nhảy thẳng vào state
-  đó trong timeline.
+- **Modal iteration theo VÒNG LẶP**: interpreter ghi một entry cho mỗi **vòng lặp** (`for`/`while`/`do-while`/
+  range-for) — state sau khi vòng đó chạy xong, kèm số vòng của chính nó, độ sâu lồng nhau và tập dòng mà vòng
+  đó đã chạy. Khi con trỏ nằm trong vòng lặp, pane hiện chip `⟳ N iterations · Ln 3`; modal hiện mỗi vòng một
+  dòng với 3 cột chỉ số: `iter` (số vòng của loop đó), `global` (thứ tự vòng lặp trong **toàn bộ** lần chạy,
+  dạng `3/8`) và `step`. Vòng lặp lồng nhau thì chọn **vòng trong cùng** theo `depth`. Bấm một dòng để nhảy
+  thẳng vào state đó trong timeline. Vòng bị `break` cắt ngang thì không tính là một vòng hoàn chỉnh.
 
 ### M4: không bao giờ đơ tab
 

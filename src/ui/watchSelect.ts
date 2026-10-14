@@ -98,7 +98,10 @@ export function selectWatchView(watch: WatchSnapshot, selection: WatchSelection)
       line: entry.line,
       exact: true,
       changedCount,
-      label: `step ${entry.step} · ${entry.name} on line ${entry.line}`,
+      label:
+        entry.kind === 'loop-iteration'
+          ? `iteration ${entry.iteration ?? '?'} of the loop on line ${entry.line}`
+          : `step ${entry.step} · ${entry.name} on line ${entry.line}`,
     };
   }
 
