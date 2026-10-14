@@ -20,7 +20,25 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | M5 | IntelliSense sâu: signature help, go-to-definition (kể cả nhảy vào header), outline + breadcrumb theo symbol | ✅ xong |
 | M6 | **Share link** ✅ · **Settings** ✅ · **Command palette** ✅ · workspace nhiều file ✅ · còn: size tuning | 🟡 gần xong |
 | M7 | `clang + lld` WASM: **Run biên dịch C/C++ thật (kèm libc++/STL)**; preview vẫn fast | ✅ xong |
-| **Mobile** | UI cho mobile — **chỉ làm sau khi mọi tính năng xong** | ⏳ (đã xếp cuối) |
+| **Mobile** | UI cho mobile: dưới 880px chuyển thành 1 pane + tab bar | ✅ xong |
+
+### UI mobile
+
+Dưới **880px** (điện thoại, cửa sổ hẹp) layout 3 cột không còn đọc được, nên đổi thành **một pane mỗi lúc** với
+tab bar ở dưới: **Files · Code · Watch · Output**.
+
+- **Mọi pane vẫn được mount**, chỉ pane đang chọn là `display: flex` — nên Monaco **giữ nguyên undo history và vị
+  trí scroll** khi bạn xem pane khác, thay vì bị dựng lại từ đầu.
+- Tab mang thông tin chỉ hữu ích khi bạn đang nhìn pane khác: chấm nhấp nháy khi đang phân tích (Watch), chấm
+  vàng khi đang chạy (Code), **badge số lỗi** (Output).
+- Bấm **Run** trên điện thoại thì tự chuyển sang tab Output — chạy là để xem kết quả.
+- Editor trên điện thoại: **tắt minimap và sticky scroll** (tốn chỗ vô ích), **bật word wrap** (không phải cuộn
+  ngang để đọc hết dòng), và gọi `layout()` khi pane hiện lại (Monaco bị `display:none` thì cần đo lại).
+- `.app` dùng `100dvh` (kèm fallback `100vh`) để **tab bar không bị thanh URL che**.
+- Toolbar cuộn ngang thay vì xuống dòng; bỏ pill trang trí và các mục status bar phụ; **modal full-width**
+  (`min-width: 420px` sẽ tràn màn hình 390px); vùng chạm 28px (icon), 38px (dòng file), 46px (tab).
+- Ngưỡng 880px nằm **một chỗ duy nhất** (`MOBILE_MAX_WIDTH`) và được cả JS lẫn CSS dùng, có test chặn hai bên
+  lệch nhau.
 
 ### Phân chia engine
 

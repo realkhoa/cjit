@@ -5,6 +5,7 @@ import { breadcrumbAt } from '@/editor/intelligence';
 import { monaco } from '@/editor/monacoSetup';
 import { bindEditor } from '@/editor/navigation';
 import { registerIntelligenceProviders } from '@/editor/providers';
+import { useIsMobile } from '@/ui/useIsMobile';
 import { getPublishedAnalysis } from '@/lang/analysisCache';
 import { useAppStore } from '@/state/store';
 import { inlineDecorationSpecs } from '@/ui/inlineValues';
@@ -26,6 +27,8 @@ export function EditorPane() {
   const inlineValuesEnabled = useAppStore((state) => state.settings.inlineValues);
   const fontSize = useAppStore((state) => state.settings.fontSize);
   const minimap = useAppStore((state) => state.settings.minimap);
+  const mobilePane = useAppStore((state) => state.mobilePane);
+  const isMobile = useIsMobile();
   const cursorLine = useAppStore((state) => state.cursor.line);
   const files = useAppStore((state) => state.files);
   const activeFileId = useAppStore((state) => state.activeFileId);
@@ -152,9 +155,24 @@ export function EditorPane() {
   useEffect(() => {
     editorRef.current?.updateOptions({
       fontSize,
-      minimap: { enabled: minimap, renderCharacters: false, maxColumn: 90 },
+      // On a phone the minimap and sticky scroll cost width and height that the
+      // code needs far more than the overview does.
+      minimap: { enabled: minimap && !isMobile, renderCharacters: false, maxColumn: 90 },
+      stickyScroll: { enabled: !isMobile },
+      // Reading code on a phone means never scrolling sideways to find the end of
+      // a line, so narrow screens wrap.
+      wordWrap: isMobile ? 'on' : 'off',
     });
-  }, [fontSize, minimap]);
+  }, [fontSize, minimap, isMobile]);
+
+  // On narrow screens this pane is hidden with `display:none` while another tab is
+  // active, which leaves Monaco with a zero-sized container. It has to re-measure
+  // when it becomes visible again.
+  useEffect(() => {
+    if (!isMobile || mobilePane !== 'code') return;
+    const frame = requestAnimationFrame(() => editorRef.current?.layout());
+    return () => cancelAnimationFrame(frame);
+  }, [isMobile, mobilePane]);
 
   useEffect(() => {
     const editor = editorRef.current;

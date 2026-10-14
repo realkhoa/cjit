@@ -2,11 +2,13 @@ import { useCallback } from 'react';
 import { ConsolePanel } from '@/ui/ConsolePanel';
 import { EditorPane } from '@/ui/EditorPane';
 import { Explorer } from '@/ui/Explorer';
+import { MobileTabs } from '@/ui/MobileTabs';
 import { Splitter } from '@/ui/Splitter';
 import { StatusBar } from '@/ui/StatusBar';
 import { TitleBar } from '@/ui/TitleBar';
 import { Toolbar } from '@/ui/Toolbar';
 import { WatchPane } from '@/ui/WatchPane';
+import { useIsMobile } from '@/ui/useIsMobile';
 import { useAppStore } from '@/state/store';
 import {
   MAX_BOTTOM_PERCENT,
@@ -25,9 +27,11 @@ export function App() {
   const rightPercent = useAppStore((state) => state.rightPercent);
   const bottomPercent = useAppStore((state) => state.bottomPercent);
   const explorerWidth = useAppStore((state) => state.explorerWidth);
+  const mobilePane = useAppStore((state) => state.mobilePane);
   const setRightPercent = useAppStore((state) => state.setRightPercent);
   const setBottomPercent = useAppStore((state) => state.setBottomPercent);
   const setExplorerWidth = useAppStore((state) => state.setExplorerWidth);
+  const isMobile = useIsMobile();
 
   // Negative sign: dragging the divider right/up makes the fixed pane smaller.
   const handleRightDelta = useCallback(
@@ -63,6 +67,40 @@ export function App() {
     },
     [setExplorerWidth],
   );
+
+  // Narrow layout: one pane at a time, chosen with the tab bar. Every pane stays
+  // mounted and the inactive ones are hidden with CSS, so the editor keeps its
+  // undo history and scroll position while you look at something else.
+  if (isMobile) {
+    return (
+      <div className="app" data-layout="mobile">
+        <TitleBar />
+        <Toolbar />
+
+        <main className="workspace workspace--mobile">
+          <aside className="pane" data-pane="files" data-active={mobilePane === 'files'}>
+            <Explorer />
+          </aside>
+          <div
+            className="pane pane--editor"
+            data-pane="code"
+            data-active={mobilePane === 'code'}
+          >
+            <EditorPane />
+          </div>
+          <div className="pane" data-pane="watch" data-active={mobilePane === 'watch'}>
+            <WatchPane />
+          </div>
+          <div className="pane" data-pane="console" data-active={mobilePane === 'console'}>
+            <ConsolePanel />
+          </div>
+        </main>
+
+        <MobileTabs />
+        <StatusBar />
+      </div>
+    );
+  }
 
   return (
     <div className="app">

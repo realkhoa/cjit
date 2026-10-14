@@ -22,6 +22,8 @@ import {
 } from '@/state/persistence';
 import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
 import type { EditorSettings } from '@/state/settings';
+import { isMobileViewport } from '@/ui/responsive';
+import type { PaneId } from '@/ui/responsive';
 import {
   decodeShare,
   encodeShare,
@@ -107,7 +109,13 @@ export interface AppState {
   readonly cursor: CursorInfo;
   /** Editor and analysis preferences, persisted with the workspace. */
   readonly settings: EditorSettings;
+  /**
+   * Which pane the narrow layout shows. Not persisted: on a phone the pane you
+   * want depends on what you are doing right now, not on last week's session.
+   */
+  readonly mobilePane: PaneId;
 
+  setMobilePane(pane: PaneId): void;
   setCodeFromEditor(code: string): void;
   loadExample(path: string, language: FileLanguage, code: string): void;
   createFile(): void;
@@ -207,6 +215,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   ),
   cursor: { line: 1, column: 1, selected: 0 },
   settings: settingsFrom(persisted),
+  mobilePane: 'code',
 
   setCodeFromEditor(code) {
     const { files, activeFileId } = get();
@@ -396,6 +405,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ cursor });
   },
 
+  setMobilePane(pane) {
+    set({ mobilePane: pane });
+  },
+
   toggleInlineValues() {
     set((state) => ({
       settings: { ...state.settings, inlineValues: !state.settings.inlineValues },
@@ -449,6 +462,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       runState: 'running',
       output: [line('system', `> Build and run with ${engine.label}`)],
       consoleTab: 'output',
+      // On a phone the console is a separate pane; running is a request to see
+      // the result, so show it.
+      ...(isMobileViewport() ? { mobilePane: 'console' as const } : {}),
     });
 
     if (fellBack) {

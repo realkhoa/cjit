@@ -32,7 +32,11 @@ button {
 .app {
   display: flex;
   flex-direction: column;
+  /* 100vh is the tall viewport on phones, so the bottom tab bar would sit behind
+     the browser's URL bar. `dvh` follows the visible height; the vh line is the
+     fallback for browsers without it. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -494,7 +498,158 @@ button {
   font-size: 13px;
 }
 
-/* ---------- scrollbars inside panes ---------- */
+/* ---------- narrow layout (phones, small windows) ---------- */
+
+.mobile-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  border-top: 1px solid var(--vs-border);
+  background: var(--vs-panel);
+}
+
+.mobile-tab {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  /* Comfortable touch target even on a small phone. */
+  height: 46px;
+  border: none;
+  border-top: 2px solid transparent;
+  background: transparent;
+  color: var(--vs-text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mobile-tab--active {
+  border-top-color: var(--vs-accent);
+  background: var(--vs-panel-alt);
+  color: var(--vs-text);
+}
+
+.mobile-tab__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vs-accent);
+  animation: cjit-pulse 1s ease-in-out infinite;
+}
+
+.mobile-tab__dot--busy {
+  background: var(--vs-warning);
+}
+
+.mobile-tab__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--vs-error);
+  color: var(--vs-editor);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+@keyframes cjit-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (max-width: 880px) {
+  /* Every control stays reachable, but the row scrolls instead of wrapping and
+     eating the little vertical space there is. */
+  .toolbar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Decorative on a phone: the Watch pane and status bar already say this. */
+  .toolbar .pill,
+  .statusbar__item--wide {
+    display: none;
+  }
+
+  .workspace--mobile {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /* All panes stay mounted (the editor keeps its undo history and scroll); only
+     the selected one is displayed. */
+  .workspace--mobile > .pane {
+    display: none;
+    height: 100%;
+    border: none;
+  }
+
+  .workspace--mobile > .pane[data-active='true'] {
+    display: flex;
+  }
+
+  .pane__header {
+    height: 36px;
+  }
+
+  /* Reachable with a thumb. */
+  .icon-btn {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .explorer__row {
+    height: 38px;
+  }
+
+  .explorer__name {
+    font-size: 13px;
+  }
+
+  .tab {
+    height: 34px;
+  }
+
+  /* `min-width: 420px` would overflow a 390px phone, and 70vh of a phone screen is
+     not much: use the width available and most of the height. */
+  .modal {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    max-height: 82dvh;
+  }
+
+  .modal__body {
+    overflow: auto;
+  }
+
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 8px;
+  }
+
+  .modal--settings {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .setting__label {
+    flex-basis: 130px;
+  }
+}
 
 .pane {
   display: flex;

@@ -25,11 +25,14 @@ export function StatusBar() {
           Ln {cursor.line}, Col {cursor.column}
         </span>
         {cursor.selected > 0 ? <span className="statusbar__item">Sel {cursor.selected}</span> : null}
-        <span className="statusbar__item">Spaces: 4</span>
-        <span className="statusbar__item">UTF-8</span>
-        <span className="statusbar__item">LF</span>
+        <span className="statusbar__item statusbar__item--wide">Spaces: 4</span>
+        <span className="statusbar__item statusbar__item--wide">UTF-8</span>
+        <span className="statusbar__item statusbar__item--wide">LF</span>
         <span className="statusbar__item">{language === 'c' ? 'C' : 'C++'}</span>
-        <span className="statusbar__item" title="Engine đã tạo ra giá trị trong pane Watch">
+        <span
+          className="statusbar__item statusbar__item--wide"
+          title="Engine đã tạo ra giá trị trong pane Watch"
+        >
           watch: {watch.engineLabel}
         </span>
       </div>
