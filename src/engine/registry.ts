@@ -29,15 +29,25 @@ const PENDING_DEFAULTS: Record<EngineId, PendingDefaults> = {
   },
 };
 
-const registry = new Map<EngineId, Engine>();
+const wired = new Map<EngineId, Engine>();
+const pendingCache = new Map<EngineId, Engine>();
 
 export function registerEngine(engine: Engine): void {
-  registry.set(engine.id, engine);
+  wired.set(engine.id, engine);
+  pendingCache.delete(engine.id);
+}
+
+/** True when the engine was explicitly registered, i.e. it really exists. */
+export function isEngineWired(id: EngineId): boolean {
+  return wired.has(id);
 }
 
 export function getEngine(id: EngineId): Engine {
-  const existing = registry.get(id);
+  const existing = wired.get(id);
   if (existing) return existing;
+
+  const cached = pendingCache.get(id);
+  if (cached) return cached;
 
   const defaults = PENDING_DEFAULTS[id];
   const pending = createPendingEngine({
@@ -46,7 +56,7 @@ export function getEngine(id: EngineId): Engine {
     milestone: defaults.milestone,
     note: defaults.note,
   });
-  registry.set(id, pending);
+  pendingCache.set(id, pending);
   return pending;
 }
 

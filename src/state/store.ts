@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_EXAMPLE } from '@/examples/sample';
-import { getEngine } from '@/engine/registry';
+import { getEngine, isEngineWired } from '@/engine/registry';
 import type { EngineId, WatchSnapshot } from '@/engine/types';
 import { emptyWatch } from '@/engine/types';
 import { DebouncedAnalyzer } from '@/state/analyzeController';
@@ -17,6 +17,18 @@ import {
 
 /** The realtime watch pane refreshes this long after the last keystroke. */
 export const ANALYSIS_DEBOUNCE_MS = 1000;
+
+/**
+ * The watch pane is always served by the fast engine.
+ *
+ * That is not a preference: a real clang+lld build cannot run once per second,
+ * so the realtime pane has exactly one possible engine. `engineId` below is the
+ * engine used by Run.
+ */
+export const WATCH_ENGINE_ID: EngineId = 'fast';
+
+/** Run prefers the real compiler (M7); today it falls back to fast, and says so. */
+export const PREFERRED_RUN_ENGINE_ID: EngineId = 'clang-wasm';
 
 export type RunState = 'idle' | 'running';
 export type AnalysisState = 'idle' | 'analyzing';
@@ -145,7 +157,6 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setEngineId(id) {
     set({ engineId: id });
-    analyzer.schedule(get().code);
   },
 
   setRightPercent(percent) {
@@ -159,7 +170,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   async run() {
     if (get().runState === 'running') return;
 
-    const engine = getEngine(get().engineId);
+    // Run uses the chosen engine; if it is not implemented yet (clang+lld lands in
+    // M7) it falls back to the fast engine **and says so**, rather than pretending
+    // the code was compiled by clang.
+    const preferred = get().engineId;
+    const engine = isEngineWired(preferred) ? getEngine(preferred) : getEngine(WATCH_ENGINE_ID);
+    const fellBack = engine.id !== preferred;
+
     const controller = new AbortController();
     runController = controller;
 
@@ -168,6 +185,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
       output: [line('system', `> Build and run with ${engine.label}`)],
       consoleTab: 'output',
     });
+
+    if (fellBack) {
+      get().appendOutput(
+        'system',
+        `> ${preferred} chưa được nối (M7) → chạy bằng ${engine.label}`,
+      );
+    }
 
     const startedAt = Date.now();
 
@@ -228,8 +252,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
 const analyzer = new DebouncedAnalyzer({
   delayMs: ANALYSIS_DEBOUNCE_MS,
   analyze: async (code, signal) => {
-    const { engineId, path } = useAppStore.getState();
-    const engine = getEngine(engineId);
+    const { path } = useAppStore.getState();
+    // Always the fast engine: the realtime pane cannot wait for a clang build.
+    const engine = getEngine(WATCH_ENGINE_ID);
     const snapshot = await engine.watch({ code, file: path }, signal);
     if (signal.aborted) return;
     useAppStore.setState({ watch: snapshot });

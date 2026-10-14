@@ -42,7 +42,7 @@ export function Toolbar() {
 
       <div className="toolbar__group">
         <label className="toolbar__label" htmlFor="engine-select">
-          Engine
+          Run engine
         </label>
         <select
           id="engine-select"
@@ -89,8 +89,8 @@ export function Toolbar() {
 
       <div className="titlebar__spacer" />
 
-      <span className="pill" title="Pane phải phân tích lại sau khi bạn ngừng gõ">
-        watch debounce {ANALYSIS_DEBOUNCE_MS} ms
+      <span className="pill" title="Pane Watch luôn dùng fast engine: build clang không thể chạy mỗi giây">
+        watch: fast · debounce {ANALYSIS_DEBOUNCE_MS} ms
       </span>
     </div>
   );

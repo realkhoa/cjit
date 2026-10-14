@@ -175,4 +175,30 @@ describe('pipeline: the store drives the real engine through the 1s debounce', (
     expect(watch.status).toBe('compile-error');
     expect(watch.diagnostics.some((item) => item.severity === 'error')).toBe(true);
   });
+
+  it('keeps the watch pane on the fast engine even when Run is set to clang', async () => {
+    registerDefaultEngines();
+    useAppStore.getState().setEngineId('clang-wasm');
+    useAppStore.getState().setCodeFromEditor('int main(void) { int fast = 7; return 0; }\n');
+    await flushAnalysis();
+
+    const watch = useAppStore.getState().watch;
+    expect(watch.engine).toBe('fast');
+    expect(watch.status).toBe('ok');
+    expect(watch.vars.map((item) => item.name)).toContain('fast');
+  });
+
+  it('falls back to the fast engine for Run, and says why', async () => {
+    registerDefaultEngines();
+    useAppStore.getState().setEngineId('clang-wasm');
+    useAppStore.getState().setCodeFromEditor('int main(void) { printf("ran\\n"); return 0; }\n');
+
+    await useAppStore.getState().run();
+
+    const state = useAppStore.getState();
+    expect(state.runState).toBe('idle');
+    expect(state.output.some((entry) => entry.text.includes('clang-wasm'))).toBe(true);
+    expect(state.output.some((entry) => entry.text.includes('ran'))).toBe(true);
+    expect(state.watch.engine).toBe('fast');
+  });
 });
