@@ -6,3 +6,6 @@ coverage/
 .DS_Store
 .vite/
 *.tsbuildinfo
+
+# ~60 MB WebAssembly toolchain, fetched by scripts/fetch-toolchain.mjs
+public/toolchain/

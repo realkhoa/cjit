@@ -19,10 +19,39 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | M4 | Execution chạy trong **Web Worker** (UI không bao giờ đơ), cancel = terminate worker | ✅ xong |
 | M5 | IntelliSense sâu: signature help, go-to-definition (kể cả nhảy vào header), outline + breadcrumb theo symbol | ✅ xong |
 | M6 | **Share link** ✅ · **Settings** ✅ · **Command palette** ✅ · workspace nhiều file ✅ · còn: size tuning | 🟡 gần xong |
-| M7 | `clang + lld` WASM: build C++ thật với libc++/STL | ⏳ |
+| M7 | `clang + lld` WASM: **đã chứng minh chạy thật** (C + C++ STL) — còn nối vào worker/engine | 🟡 đang làm |
 | **Mobile** | UI cho mobile — **chỉ làm sau khi mọi tính năng xong** | ⏳ (đã xếp cuối) |
 
-### M6: chia sẻ, cấu hình, command palette
+### M7: clang + lld trong browser — đã chứng minh chạy thật
+
+**C và C++ (kèm STL) thật sự biên dịch và chạy được**, verify bằng `npm run smoke:clang` (chạy cả trong CI):
+
+```
+[PASS] main.c:      c: total=30                                   wasm 30 KB
+[PASS] main.cpp:    sorted: 1 3 5 9 / sum = 18                    wasm 611 KB
+                    (iostream + vector + string + algorithm + function template)
+[PASS] modern.cpp:  c++14: 3 rows=2                               wasm 602 KB
+                    (lambda, auto, emplace_back, std::pair)
+```
+
+Toolchain (`~58 MB`) **không commit vào git**: `npm run toolchain` tải `clang`, `lld`, `sysroot.tar`, `memfs`,
+`shared.js` (nguồn [binji/wasm-clang](https://github.com/binji/wasm-clang), Apache-2.0 + LLVM license, có kèm
+file license). CI tải trước khi build nên site tự phục vụ toolchain từ origin của chính nó — Run không phụ thuộc
+CDN bên thứ ba.
+
+Hai điều đáng ghi lại vì đã tốn công tìm:
+
+- `sysroot.tar` **có sẵn libc++**: 195 header trong `include/c++/v1/` (`vector`, `string`, `iostream`…) cùng
+  `libc++.a`, `libc++abi.a`, `libc.a`, `libm.a`, `crt1.o` trong `lib/wasm32-wasi/`.
+- Gọi `wasm-ld` **trực tiếp** (như runtime mẫu làm) thì phải tự nêu
+  `lib/clang/8.0.1/lib/wasi/libclang_rt.builtins-wasm32.a`, nếu không sẽ lỗi
+  `undefined symbol: __lttf2` khi link bất kỳ object nào của libc++ (clang driver tự thêm archive này, gọi tay thì không).
+
+Giới hạn: clang **8.0.1** (2019) → C++14 đầy đủ, C++17 một phần (`std::optional`, `string_view` không có).
+
+**Phân chia engine (đúng như thiết kế):** pane Watch / inline values / timeline / Problems **luôn** dùng fast
+engine (`WATCH_ENGINE_ID = 'fast'`) vì preview phải phản hồi sau 1 giây; chỉ **Run (F5)** mới dùng clang. Trong
+lúc toolchain chưa nạp xong, Run tự fallback về fast engine và **nói rõ** trong console.
 
 - **Share link**: nút *Share link* mã hoá **toàn bộ workspace** (mọi file) vào **URL fragment** — fragment không
   được gửi lên server nên app vẫn thuần client. Payload được **deflate-raw** rồi **base64url** (marker `1`/`0` cho

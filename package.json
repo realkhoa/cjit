@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "toolchain": "node scripts/fetch-toolchain.mjs",
+    "smoke:clang": "node scripts/clang-smoke.mjs"
   },
   "dependencies": {
     "monaco-editor": "^0.52.0",
