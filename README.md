@@ -19,10 +19,37 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | M4 | Execution chạy trong **Web Worker** (UI không bao giờ đơ), cancel = terminate worker | ✅ xong |
 | M5 | IntelliSense sâu: signature help, go-to-definition (kể cả nhảy vào header), outline + breadcrumb theo symbol | ✅ xong |
 | M6 | **Share link** ✅ · **Settings** ✅ · **Command palette** ✅ · workspace nhiều file ✅ · còn: size tuning | 🟡 gần xong |
-| M7 | `clang + lld` WASM: **đã chứng minh chạy thật** (C + C++ STL) — còn nối vào worker/engine | 🟡 đang làm |
+| M7 | `clang + lld` WASM: **Run biên dịch C/C++ thật (kèm libc++/STL)**; preview vẫn fast | ✅ xong |
 | **Mobile** | UI cho mobile — **chỉ làm sau khi mọi tính năng xong** | ⏳ (đã xếp cuối) |
 
-### M7: clang + lld trong browser — đã chứng minh chạy thật
+### Phân chia engine
+
+| Việc | Engine | Vì sao |
+|---|---|---|
+| Pane Watch, inline values, timeline, modal iteration | **fast** (front-end engine) | phải cập nhật sau mỗi 1s; build clang không thể chạy mỗi giây |
+| Problems, suggestion, signature help, go-to-def | **fast** | cùng một lần phân tích, không cần compiler |
+| **Run / F5** | **clang + lld (WebAssembly)** | biên dịch C/C++ thật, kèm libc++ |
+
+`WATCH_ENGINE_ID = 'fast'` là hằng số, không phải lựa chọn: pane phải chỉ có đúng một engine khả thi. Dropdown
+trên toolbar chỉ chọn engine cho **Run**. Nếu clang không chạy được (chưa tải toolchain, hoặc worker bị chặn),
+Run **tự fallback về fast engine và ghi rõ lý do** trong console — không bao giờ im lặng giả vờ đã build bằng clang.
+
+### M7: clang + lld + libc++ trong browser
+
+Pipeline: `clang.wasm` biên dịch → `wasm-ld` link với `libc++`/`libc++abi`/`libc` + `crt1.o` → chạy module wasm
+vừa tạo, stdout đổ về console. Chạy trong **worker riêng** nên editor không đơ, và **Stop = terminate worker**
+(build wasm đồng bộ nên không thể "xin dừng").
+
+- **Diagnostics thật**: lỗi của clang được parse thành diagnostic có dòng/cột → hiện trong **Problems** và thành
+  marker trong editor. Lỗi nằm trong header hệ thống thì gắn nhãn `<vector>` chứ không gán sai sang file của bạn.
+- **stdin** hoạt động (`scanf` đọc từ tab Stdin).
+- Lần Run đầu tải ~58 MB toolchain (console báo trước); sau đó browser cache.
+- Giới hạn: clang **8.0.1** → C++14 đầy đủ, C++17 một phần (`std::optional`, `string_view` không có); không có
+  `-pthread`/COOP-COEP nên không có đa luồng thật.
+
+**Verify**: `tests/clangRuntime.test.ts` chạy **clang thật** trong CI (compile + run C, C++ STL + template,
+báo lỗi thật, `scanf`) và được skip khi chưa tải toolchain. `tests/clangEngine.test.ts` kiểm tra hợp đồng của
+engine — trong đó có test khẳng định **`watch()` không bao giờ chạm vào clang**, đúng như thiết kế.
 
 **C và C++ (kèm STL) thật sự biên dịch và chạy được**, verify bằng `npm run smoke:clang` (chạy cả trong CI):
 

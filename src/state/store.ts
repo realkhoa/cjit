@@ -462,7 +462,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     try {
       const state = get();
-      const outcome = await engine.run(
+      let outcome = await engine.run(
         { code: state.code, file: state.path },
         state.stdin,
         {
@@ -472,6 +472,26 @@ export const useAppStore = create<AppState>()((set, get) => ({
         },
         controller.signal,
       );
+
+      // Clang could not run at all (toolchain not downloaded, or a blocked
+      // worker). Run still works: fall back to the fast engine and say so.
+      if (engine.id !== WATCH_ENGINE_ID && outcome.status === 'unsupported' && !controller.signal.aborted) {
+        const fallback = getEngine(WATCH_ENGINE_ID);
+        get().appendOutput(
+          'system',
+          `> ${engine.id} (${engine.label}) không chạy được: ${outcome.detail} → chạy bằng ${fallback.id}`,
+        );
+        outcome = await fallback.run(
+          { code: state.code, file: state.path },
+          state.stdin,
+          {
+            stdout: (chunk) => get().appendOutput('stdout', chunk),
+            stderr: (chunk) => get().appendOutput('stderr', chunk),
+            watch: (snapshot) => set({ watch: snapshot }),
+          },
+          controller.signal,
+        );
+      }
 
       const elapsed = Date.now() - startedAt;
       set((state) => ({

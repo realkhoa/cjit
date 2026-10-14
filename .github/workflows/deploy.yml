@@ -36,17 +36,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests
-        run: npm test
-
-      # ~58 MB of clang + lld + sysroot. Kept out of git, fetched here so the
-      # deployed site serves the toolchain from its own origin.
+      # ~58 MB of clang + lld + sysroot. Kept out of git; fetched here so the
+      # clang tests below compile real C/C++, and so the deployed site serves the
+      # toolchain from its own origin instead of a third-party CDN.
       - name: Fetch WebAssembly toolchain
         run: npm run toolchain
 
-      # Proves "Run compiles real C/C++" end to end on every push.
-      - name: Compiler smoke test
-        run: npm run smoke:clang
+      # Includes the tests that drive clang -> lld -> execute for real.
+      - name: Unit tests
+        run: npm test
 
       - name: Build
         run: npm run build

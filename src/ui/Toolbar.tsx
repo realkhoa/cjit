@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ENGINE_ORDER, getEngine } from '@/engine/registry';
 import type { EngineId } from '@/engine/types';
 import { EXAMPLES } from '@/examples/sample';
-import { ANALYSIS_DEBOUNCE_MS, useAppStore } from '@/state/store';
+import { useAppStore } from '@/state/store';
 import { SettingsDialog } from '@/ui/SettingsDialog';
 
 export function Toolbar() {
@@ -14,6 +14,7 @@ export function Toolbar() {
   const loadExample = useAppStore((state) => state.loadExample);
   const setEngineId = useAppStore((state) => state.setEngineId);
   const inlineValues = useAppStore((state) => state.settings.inlineValues);
+  const debounceMs = useAppStore((state) => state.settings.debounceMs);
   const toggleInlineValues = useAppStore((state) => state.toggleInlineValues);
   const shareLink = useAppStore((state) => state.shareLink);
   const path = useAppStore((state) => state.path);
@@ -64,6 +65,7 @@ export function Toolbar() {
           className="select"
           value={engineId}
           onChange={(event) => setEngineId(event.target.value as EngineId)}
+          title="Engine cho nút Run/F5. clang + lld biên dịch C/C++ thật bằng WebAssembly (lần đầu tải ~58 MB toolchain, sau đó browser cache lại). Pane Watch luôn dùng fast engine vì build clang không thể chạy mỗi giây."
         >
           {ENGINE_ORDER.map((id) => (
             <option key={id} value={id}>
@@ -135,8 +137,11 @@ export function Toolbar() {
 
       <div className="titlebar__spacer" />
 
-      <span className="pill" title="Pane Watch luôn dùng fast engine: build clang không thể chạy mỗi giây">
-        watch: fast · debounce {ANALYSIS_DEBOUNCE_MS} ms
+      <span
+        className="pill"
+        title="Pane Watch, inline values và timeline luôn do fast engine tính (clang không thể build mỗi giây). Chỉ nút Run mới dùng clang."
+      >
+        watch: fast · debounce {debounceMs} ms
       </span>
     </div>
   );
