@@ -319,6 +319,11 @@ const BITS_TARGETS: readonly string[] = [
   'time.h',
 ];
 
+/** Every header name the engine recognises, for `#include <` completion. */
+export function knownHeaderNames(): readonly string[] {
+  return [...new Set([...BUILTIN_HEADERS.keys(), ...CPP_NATIVE_HEADERS])].sort();
+}
+
 /** True for a header whose content is an alias of another built-in header. */
 export function headerAliasTarget(name: string): string | undefined {
   const target = CPP_HEADER_ALIASES.get(name);

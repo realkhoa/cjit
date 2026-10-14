@@ -1,8 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, Fragment } from 'react';
 import type * as Monaco from 'monaco-editor';
 import { registerKeywordCompletions, registerSymbolCompletions } from '@/editor/completion';
+import { breadcrumbAt } from '@/editor/intelligence';
 import { monaco } from '@/editor/monacoSetup';
 import { bindEditor } from '@/editor/navigation';
+import { registerIntelligenceProviders } from '@/editor/providers';
+import { getPublishedAnalysis } from '@/lang/analysisCache';
 import { useAppStore } from '@/state/store';
 import { inlineDecorationSpecs } from '@/ui/inlineValues';
 import { EDITOR_THEME_DARK } from '@/ui/theme/monacoTheme';
@@ -21,6 +24,14 @@ export function EditorPane() {
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
   const watch = useAppStore((state) => state.watch);
   const inlineValuesEnabled = useAppStore((state) => state.inlineValues);
+  const cursorLine = useAppStore((state) => state.cursor.line);
+
+  // Symbol trail at the caret, from the document symbols the front-end produces.
+  const breadcrumb = useMemo(() => {
+    const analysis = getPublishedAnalysis();
+    if (!analysis) return [] as string[];
+    return breadcrumbAt(analysis, cursorLine);
+  }, [watch, cursorLine]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -28,6 +39,7 @@ export function EditorPane() {
 
     registerKeywordCompletions(monaco);
     registerSymbolCompletions(monaco);
+    registerIntelligenceProviders(monaco);
 
     const editor = monaco.editor.create(host, {
       value: useAppStore.getState().code,
@@ -195,6 +207,12 @@ export function EditorPane() {
         <span>{path}</span>
         <span className="breadcrumb__sep">›</span>
         <span>{language === 'c' ? 'C' : 'C++'}</span>
+        {breadcrumb.map((segment) => (
+          <Fragment key={segment}>
+            <span className="breadcrumb__sep">›</span>
+            <span className="breadcrumb__symbol">{segment}</span>
+          </Fragment>
+        ))}
         <span className="breadcrumb__hint">
           {diagnostics.length > 0 ? `${diagnostics.length} diagnostics` : 'no diagnostics'}
         </span>
