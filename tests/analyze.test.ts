@@ -1,0 +1,178 @@
+import { describe, expect, it } from 'vitest';
+import { registerDefaultEngines } from '@/engine/bootstrap';
+import { createFastEngine } from '@/engine/fastEngine';
+import type { RunSink } from '@/engine/types';
+import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP } from '@/examples/sample';
+import { getPublishedAnalysis } from '@/lang/analysisCache';
+import { analyzeSource } from '@/lang/analyze';
+import { flushAnalysis, useAppStore } from '@/state/store';
+
+const CLEAN_C = [
+  '#include <stdio.h>',
+  'int main(void) {',
+  '    int answer = 42;',
+  '    for (int i = 0; i < 3; i++) {',
+  '        printf("%d\\n", i);',
+  '    }',
+  '    return answer;',
+  '}',
+  '',
+].join('\n');
+
+describe('analyze: the whole front-end on real code', () => {
+  it('reports no diagnostics for a clean C program with implicit headers', () => {
+    const result = analyzeSource(CLEAN_C, 'main.c');
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.errorCount).toBe(0);
+    expect(result.implicitHeaders).toBe(true);
+    expect(result.tokenCount).toBeGreaterThan(0);
+    expect(result.symbols.symbols.map((symbol) => symbol.name)).toEqual(
+      expect.arrayContaining(['main', 'answer', 'i']),
+    );
+  });
+
+  it('finds printf in the built-in header so calls are known without an include', () => {
+    const result = analyzeSource('int main(void) { printf("hi"); return 0; }\n', 'main.c');
+
+    const printf = result.symbols.symbols.find((symbol) => symbol.name === 'printf');
+    expect(printf?.kind).toBe('function');
+    expect(printf?.file).toBe('<stdio.h>');
+  });
+
+  it('reports a syntax error on the line where it happens', () => {
+    const broken = ['int main(void) {', '    int a = ;', '    return 0;', '}'].join('\n');
+    const result = analyzeSource(broken, 'main.c');
+
+    expect(result.errorCount).toBeGreaterThan(0);
+    expect(result.diagnostics[0]?.startLine).toBe(2);
+  });
+
+  it('resolves the default C++ sample with no diagnostics at all', () => {
+    const result = analyzeSource(SAMPLE_MAIN_CPP, 'main.cpp');
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.errorCount).toBe(0);
+    expect(result.warningCount).toBe(0);
+  });
+
+  it('handles the C sample with and without its explicit include', () => {
+    expect(analyzeSource(SAMPLE_HELLO_C, 'main.c').errorCount).toBe(0);
+    expect(analyzeSource(`#include <stdio.h>\n${SAMPLE_HELLO_C}`, 'main.c').errorCount).toBe(0);
+  });
+});
+
+describe('fast engine: honest snapshots and runs', () => {
+  it('returns real values from a real execution', async () => {
+    const engine = createFastEngine();
+    const snapshot = await engine.watch({ code: CLEAN_C, file: 'main.c' }, new AbortController().signal);
+
+    expect(snapshot.engine).toBe('fast');
+    expect(snapshot.status).toBe('ok');
+    expect(snapshot.diagnostics).toEqual([]);
+    expect(snapshot.steps).toBeGreaterThan(0);
+
+    const byName = new Map(snapshot.vars.map((item) => [item.name, item]));
+    // These are values the program actually produced, not declarations echoed back.
+    expect(byName.get('answer')?.value).toBe('42');
+    expect(byName.get('answer')?.type).toBe('int');
+    expect(byName.get('i')?.value).toBe('3');
+    expect(byName.get('printf')).toBeUndefined();
+  });
+
+  it('reports compile-error with diagnostics when the code does not parse', async () => {
+    const engine = createFastEngine();
+    const snapshot = await engine.watch(
+      { code: 'int main(void) { int a = ; return 0; }\n', file: 'main.c' },
+      new AbortController().signal,
+    );
+
+    expect(snapshot.status).toBe('compile-error');
+    expect(snapshot.diagnostics.length).toBeGreaterThan(0);
+  });
+
+  it('publishes its analysis so completion can use the symbol table', async () => {
+    const engine = createFastEngine();
+    await engine.watch({ code: 'int main(void) { int local = 1; return local; }\n', file: 'main.c' }, new AbortController().signal);
+
+    const published = getPublishedAnalysis();
+    expect(published).not.toBeNull();
+    expect(published?.symbols.symbols.map((symbol) => symbol.name)).toContain('local');
+  });
+
+  it('streams real stdout and reports the exit code', async () => {
+    const engine = createFastEngine();
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    const sink: RunSink = {
+      stdout: (chunk) => stdout.push(chunk),
+      stderr: (chunk) => stderr.push(chunk),
+      watch: () => undefined,
+    };
+
+    const outcome = await engine.run(
+      { code: CLEAN_C, file: 'main.c' },
+      '',
+      sink,
+      new AbortController().signal,
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(stdout.join('')).toBe('0\n1\n2\n');
+    expect(stderr.join('')).toBe('');
+    // `return answer;` with answer == 42.
+    expect(outcome.exitCode).toBe(42);
+  });
+
+  it('reports a build failure on stderr when the code does not parse', async () => {
+    const engine = createFastEngine();
+    const stderr: string[] = [];
+    const sink: RunSink = {
+      stdout: () => undefined,
+      stderr: (chunk) => stderr.push(chunk),
+      watch: () => undefined,
+    };
+
+    const outcome = await engine.run(
+      { code: 'int main(void) { int a = ; }\n', file: 'main.c' },
+      '',
+      sink,
+      new AbortController().signal,
+    );
+
+    expect(outcome.status).toBe('compile-error');
+    expect(stderr.join('')).toContain('Build failed');
+  });
+});
+
+describe('pipeline: the store drives the real engine through the 1s debounce', () => {
+  it('updates the watch pane from real code after the debounce is flushed', async () => {
+    registerDefaultEngines();
+    useAppStore.getState().setEngineId('fast');
+    useAppStore.getState().setCodeFromEditor(CLEAN_C);
+
+    // Nothing has run yet: the debounce is still pending.
+    expect(useAppStore.getState().analysisState).toBe('idle');
+
+    await flushAnalysis();
+
+    const watch = useAppStore.getState().watch;
+    expect(watch.engine).toBe('fast');
+    expect(watch.status).toBe('ok');
+    const byName = new Map(watch.vars.map((item) => [item.name, item]));
+    expect(byName.get('answer')?.value).toBe('42');
+    expect(byName.get('i')?.value).toBe('3');
+    expect(watch.diagnostics).toEqual([]);
+  });
+
+  it('surfaces parse errors from the store as compile-error', async () => {
+    registerDefaultEngines();
+    useAppStore.getState().setEngineId('fast');
+    useAppStore.getState().setCodeFromEditor('int main(void) { int a = ; return 0; }\n');
+    await flushAnalysis();
+
+    const watch = useAppStore.getState().watch;
+    expect(watch.status).toBe('compile-error');
+    expect(watch.diagnostics.some((item) => item.severity === 'error')).toBe(true);
+  });
+});

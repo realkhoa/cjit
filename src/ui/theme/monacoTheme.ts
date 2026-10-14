@@ -1,0 +1,77 @@
+import type * as Monaco from 'monaco-editor';
+
+/**
+ * Monaco theme generated from the same palette as `tokens.css`
+ * (Visual Studio 2022 Dark syntax colours).
+ */
+export const EDITOR_THEME_DARK = 'cjit-vs-dark';
+
+export function defineEditorThemes(monaco: typeof Monaco): void {
+  monaco.editor.defineTheme(EDITOR_THEME_DARK, {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: '', foreground: 'd4d4d4' },
+      { token: 'comment', foreground: '6a9955' },
+      { token: 'keyword', foreground: '569cd6' },
+      { token: 'keyword.control', foreground: 'c586c0' },
+      { token: 'keyword.directive', foreground: '9b9b9b' },
+      { token: 'string', foreground: 'ce9178' },
+      { token: 'number', foreground: 'b5cea8' },
+      { token: 'type', foreground: '4ec9b0' },
+      { token: 'type.identifier', foreground: '4ec9b0' },
+      { token: 'identifier', foreground: '9cdcfc' },
+      { token: 'variable', foreground: '9cdcfc' },
+      { token: 'variable.predefined', foreground: 'dcdcaa' },
+      { token: 'function', foreground: 'dcdcaa' },
+      { token: 'namespace', foreground: '4ec9b0' },
+      { token: 'operator', foreground: 'd4d4d4' },
+      { token: 'delimiter', foreground: 'd4d4d4' },
+      { token: 'delimiter.bracket', foreground: 'd4d4d4' },
+      { token: 'annotation', foreground: 'dcdcaa' },
+      { token: 'constant', foreground: '4fc1ff' },
+    ],
+    colors: {
+      'editor.background': '#1e1e1e',
+      'editor.foreground': '#d4d4d4',
+      'editorCursor.foreground': '#aeafad',
+      'editor.lineHighlightBackground': '#282828',
+      'editor.lineHighlightBorder': '#00000000',
+      'editor.selectionBackground': '#264f78',
+      'editor.inactiveSelectionBackground': '#3a3d41',
+      'editor.selectionHighlightBackground': '#add6ff26',
+      'editorLineNumber.foreground': '#858585',
+      'editorLineNumber.activeForeground': '#c6c6c6',
+      'editorIndentGuide.background1': '#404040',
+      'editorIndentGuide.activeBackground1': '#707070',
+      'editorWhitespace.foreground': '#3b3b3b',
+      'editorRuler.foreground': '#2a2a2a',
+      'editorBracketMatch.background': '#0d3a58',
+      'editorBracketMatch.border': '#888888',
+      'editorGutter.background': '#1e1e1e',
+      'editorGutter.modifiedBackground': '#1b81a8',
+      'editorWidget.background': '#252526',
+      'editorWidget.border': '#454545',
+      'editorWidget.foreground': '#cccccc',
+      'editorSuggestWidget.background': '#252526',
+      'editorSuggestWidget.border': '#454545',
+      'editorSuggestWidget.foreground': '#d4d4d4',
+      'editorSuggestWidget.selectedBackground': '#04395e',
+      'editorSuggestWidget.highlightForeground': '#007acc',
+      'editorHoverWidget.background': '#252526',
+      'editorHoverWidget.border': '#454545',
+      'input.background': '#3c3c3c',
+      'input.border': '#3c3c3c',
+      'focusBorder': '#007fd4',
+      'minimap.background': '#1e1e1e',
+      'scrollbar.shadow': '#00000000',
+      'scrollbarSlider.background': '#79797966',
+      'scrollbarSlider.hoverBackground': '#646464b3',
+      'scrollbarSlider.activeBackground': '#bfbfbf66',
+      'list.hoverBackground': '#2a2d2e',
+      'list.activeSelectionBackground': '#04395e',
+      'menu.background': '#1f1f1f',
+      'menu.foreground': '#cccccc',
+    },
+  });
+}

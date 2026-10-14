@@ -1,0 +1,54 @@
+/*
+ * Design tokens.
+ *
+ * Every colour in the app resolves through one of these variables, so the whole
+ * look can be swapped (VS 2022 dark -> VS 2026 dark -> light) by editing this
+ * file plus src/ui/theme/monacoTheme.ts. No component hardcodes a hex value.
+ *
+ * Values below are the Visual Studio 2022 Dark palette.
+ */
+:root {
+  /* Shell surfaces */
+  --vs-shell: #2d2d30;
+  --vs-shell-hover: #3e3e42;
+  --vs-panel: #252526;
+  --vs-panel-alt: #1b1b1c;
+  --vs-editor: #1e1e1e;
+
+  /* Lines */
+  --vs-border: #3f3f46;
+  --vs-border-strong: #46464b;
+  --vs-hover: #2a2d2e;
+  --vs-selection: #264f78;
+
+  /* Text */
+  --vs-text: #d4d4d4;
+  --vs-text-dim: #a9a9a9;
+  --vs-text-muted: #6d6d6d;
+
+  /* Accent (VS blue) */
+  --vs-accent: #007acc;
+  --vs-accent-hover: #1177bb;
+  --vs-accent-pressed: #005a9e;
+  --vs-status: #007acc;
+  --vs-focus: #007fd4;
+
+  /* Tabs */
+  --vs-tab-active: #1e1e1e;
+  --vs-tab-inactive: #2d2d30;
+
+  /* Semantic */
+  --vs-error: #f14c4c;
+  --vs-warning: #cca700;
+  --vs-success: #89d185;
+  --vs-info: #75beff;
+  --vs-changed: #f14c4c;
+
+  /* Geometry + type */
+  --vs-radius: 4px;
+  --vs-font-ui: 'Segoe UI', 'Segoe UI Variable Text', system-ui, -apple-system, sans-serif;
+  --vs-font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --vs-font-size-ui: 13px;
+  --vs-font-size-code: 13px;
+  --vs-splitter: 6px;
+}
