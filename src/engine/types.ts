@@ -65,6 +65,16 @@ export interface StackFrame {
   readonly line: number;
 }
 
+/**
+ * Variable values as they were the first time a given line finished running.
+ * This is what lets the watch pane answer "what do the variables hold at the
+ * line my cursor is on?" instead of only showing the final state.
+ */
+export interface LineState {
+  readonly line: number;
+  readonly vars: readonly VarNode[];
+}
+
 export interface WatchSnapshot {
   readonly engine: EngineId | null;
   readonly engineLabel: string;
@@ -81,6 +91,8 @@ export interface WatchSnapshot {
   /** Recorded timeline entries; 0 for engines that keep no history. */
   readonly historyLength: number;
   readonly diagnostics: readonly Diagnostic[];
+  /** Per-line snapshots, ascending by line. Empty for engines that keep none. */
+  readonly lineStates: readonly LineState[];
 }
 
 export interface RunOutcome {
@@ -132,6 +144,7 @@ export function emptyWatch(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
     truncated: false,
     historyLength: 0,
     diagnostics: [],
+    lineStates: [],
     ...patch,
   };
 }

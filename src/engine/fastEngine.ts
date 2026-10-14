@@ -83,8 +83,25 @@ function detailOf(result: ExecutionResult): string {
   return parts.join(' · ');
 }
 
-function snapshotFrom(analysis: AnalysisResult, result: ExecutionResult): WatchSnapshot {
+/** Nothing ran, so there are no values: only diagnostics. */
+function compileErrorSnapshot(analysis: AnalysisResult): WatchSnapshot {
   return {
+    engine: 'fast',
+    engineLabel: 'Fast engine',
+    status: 'compile-error',
+    detail: `Build failed: ${summarize(analysis.diagnostics)}`,
+    vars: [],
+    frames: [],
+    steps: 0,
+    elapsedMs: analysis.elapsedMs,
+    truncated: false,
+    historyLength: 0,
+    diagnostics: analysis.diagnostics,
+    lineStates: [],
+  };
+}
+
+function snapshotFrom(analysis: AnalysisResult, result: ExecutionResult): WatchSnapshot {  return {
     engine: 'fast',
     engineLabel: 'Fast engine',
     status: statusOf(result),
@@ -96,6 +113,10 @@ function snapshotFrom(analysis: AnalysisResult, result: ExecutionResult): WatchS
     truncated: result.truncated,
     historyLength: result.historyLength,
     diagnostics: [...analysis.diagnostics, ...result.diagnostics],
+    lineStates: result.lineStates.map((state) => ({
+      line: state.line,
+      vars: state.vars.map(toVarNode),
+    })),
   };
 }
 
@@ -109,21 +130,7 @@ export function createFastEngine(): Engine {
       // Completion/hover read the symbol table published for this snapshot.
       publishAnalysis(analysis);
 
-      if (analysis.errorCount > 0) {
-        return {
-          engine: 'fast',
-          engineLabel: 'Fast engine',
-          status: 'compile-error',
-          detail: `Build failed: ${summarize(analysis.diagnostics)}`,
-          vars: [],
-          frames: [],
-          steps: 0,
-          elapsedMs: analysis.elapsedMs,
-          truncated: false,
-          historyLength: 0,
-          diagnostics: analysis.diagnostics,
-        };
-      }
+      if (analysis.errorCount > 0) return compileErrorSnapshot(analysis);
 
       const result = execute(analysis.unit, { ...WATCH_LIMITS, collectWatch: true });
       return snapshotFrom(analysis, result);
@@ -135,19 +142,7 @@ export function createFastEngine(): Engine {
 
       if (analysis.errorCount > 0) {
         sink.stderr(`Build failed: ${summarize(analysis.diagnostics)}\n`);
-        sink.watch({
-          engine: 'fast',
-          engineLabel: 'Fast engine',
-          status: 'compile-error',
-          detail: `Build failed: ${summarize(analysis.diagnostics)}`,
-          vars: [],
-          frames: [],
-          steps: 0,
-          elapsedMs: analysis.elapsedMs,
-          truncated: false,
-          historyLength: 0,
-          diagnostics: analysis.diagnostics,
-        });
+        sink.watch(compileErrorSnapshot(analysis));
         return {
           status: 'compile-error',
           detail: 'Build failed — see the Problems tab',

@@ -13,12 +13,55 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 |---|---|---|
 | **M0** | Skeleton Vite+TS+React, layout 3 pane resizable, theme VS 2022 Dark, engine contract, debounce controller, CI deploy | ✅ xong |
 | **M1** | Preprocessor + lexer + parser + symbol table; markers, Problems, completion & hover theo scope | ✅ xong |
-| M2 | Evaluator/interpreter + Run → console stdout/stderr/exit code, worker + budget | ⏳ |
-| M3 | Watch engine: snapshot biến, expand struct/array, changed-value, timeline, call stack | ⏳ |
+| **M2** | Interpreter thật (memory model, con trỏ, struct, malloc, printf/scanf), Run → console stdout/stderr/exit code, budget chống treo | ✅ xong |
+| **C++** | Fast engine tự resolve `iostream`/`vector`/`string`/`algorithm`/template/range-for — không đẩy sang clang-wasm | ✅ xong |
+| M3 | Watch: đã có giá trị theo **dòng con trỏ**; còn timeline scrub + highlight giá trị đổi | 🟡 một phần |
 | M4 | Chạy pipeline debounce trong Web Worker, cancel giữa chừng | ⏳ |
 | M5 | IntelliSense sâu: signature help, go-to-def, completion theo member/`.h` | ⏳ (đã có bản cơ bản ở M1) |
 | M6 | Polish: examples, share URL, settings, command palette, size tuning | ⏳ |
 | M7 | `clang + lld` WASM: build C++ thật với libc++/STL | ⏳ |
+
+### M2: chương trình chạy thật
+
+Interpreter tree-walking với **memory model thật** (Uint8Array phẳng + cấp phát/free first-fit), nên `&x`,
+số học con trỏ, array, struct, `malloc`/`free` và struct assignment hành xử như C chứ không phải như các
+trường hợp đặc biệt:
+
+- **Kiểu**: `char/short/int/long`, `unsigned`, `float/double`, `_Bool`, enum, con trỏ, array (kể cả `[]` suy
+  độ dài từ initializer), struct/union với layout căn chỉnh thật (`sizeof(struct {int x; int y;})` = 8).
+- **Điều khiển**: if/else, for, while, do-while, switch có fall-through, break/continue, goto/label, đệ quy.
+- **Thư viện**: `printf` family (cờ/width/precision/`*`/mọi conversion), `scanf`/`sscanf`, chuỗi, `malloc`
+  family, `mem*`, `atoi/atof/strtol`, `qsort` (gọi comparator của bạn), math, ctype, `assert`.
+- **An toàn**: budget step + wall-clock → `budget`/`timeout` thay vì treo tab; chia 0, null deref, out of
+  memory, đọc biến chưa khởi tạo đều được báo **kèm số dòng**, không bao giờ trả giá trị giả.
+
+### C++ được resolve ngay trong fast engine
+
+Trước đây `<iostream>`, `<vector>`, `<string>` và `template` chỉ hiện ghi chú "cần clang-wasm". Giờ chúng
+chạy thật, không còn diagnostic nào:
+
+- `std::cout` / `std::cerr` / `std::endl` với chuỗi `<<` (đúng thứ tự, không mất nhánh trước).
+- `std::vector<T>`: `{}` init, `push_back`, `[]`, `size`, `at`, `front/back`, `begin/end`, `resize`, range-for.
+  Vector mang descriptor kiểu phần tử của chính nó, nên `std::vector<T>` bên trong template vẫn chạy đúng.
+- `std::string`: khởi tạo từ literal, `+`, `size`, `substr`, `c_str`, `find`, in bằng `<<`.
+- `std::sort` (có/không comparator), `std::reverse`, `std::min/max/abs/swap`, `std::to_string`, `std::stoi/stod`.
+- `template <typename T>` được parse thành hàm thật; `T` là kiểu động, `T total{}` **suy ra kiểu từ lần gán
+  đầu tiên** — nên cùng một template chạy đúng cho cả `vector<int>` và `vector<double>`.
+- `<cstdio>`/`<cstring>`/`<cmath>`… map về header C tương ứng, kèm khai báo thật.
+- Vẫn báo trung thực (một lần) với thứ không thể thực thi: `class`, `namespace` — vì bỏ qua chúng âm thầm sẽ
+  làm sai kết quả.
+
+### Watch: giá trị tại dòng con trỏ
+
+Pane Watch mặc định hiển thị giá trị mà biến có **tại dòng con trỏ đang đứng** (state lần đầu dòng đó chạy
+xong — giống breakpoint), và có toggle sang `Final` để xem state sau khi chương trình kết thúc. Nếu dòng con
+trỏ chưa từng chạy, pane nói rõ và lùi về dòng gần nhất trước đó.
+
+### Giới hạn đã biết (sẽ do M7/clang giải quyết)
+
+Số nguyên 64-bit giữ độ chính xác của `double`; `class`/`namespace`/`STL` đầy đủ (map, set, template class,
+exception) chưa thực thi được; chưa có I/O file. Đây là ranh giới của fast engine, và nó luôn nói ra thay vì
+đoán.
 
 ### M1 có gì
 

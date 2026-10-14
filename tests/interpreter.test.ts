@@ -369,3 +369,42 @@ describe('interpreter: watch values', () => {
     expect(without.vars).toEqual([]);
   });
 });
+
+describe('interpreter: per-line state (watch at the cursor line)', () => {
+  const PROGRAM = [
+    'int main(void) {', //                                     1
+    '    int total = 0;', //                                   2
+    '    for (int i = 1; i <= 3; i++) {', //                   3
+    '        total += i;', //                                  4
+    '    }', //                                                5
+    '    printf("%d\\n", total);', //                          6
+    '    return 0;', //                                        7
+    '}', //                                                    8
+  ].join('\n');
+
+  it('records the state the first time each line ran', () => {
+    const result = run(PROGRAM);
+
+    const valueAt = (line: number, name: string): string | undefined =>
+      result.lineStates.find((state) => state.line === line)?.vars.find((item) => item.name === name)
+        ?.value;
+
+    expect(valueAt(2, 'total')).toBe('0');
+    // Line 4 runs three times; the first run is what a breakpoint would show.
+    expect(valueAt(4, 'total')).toBe('1');
+    expect(valueAt(4, 'i')).toBe('1');
+    // By the printf, the loop has finished.
+    expect(valueAt(6, 'total')).toBe('6');
+  });
+
+  it('keys the states by line and keeps them ascending', () => {
+    const lines = run(PROGRAM).lineStates.map((state) => state.line);
+    expect(lines.length).toBeGreaterThan(3);
+    expect([...lines].sort((a, b) => a - b)).toEqual(lines);
+  });
+
+  it('records nothing when watch collection is off', () => {
+    const result = run('int main(void) { int a = 1; return 0; }', { collectWatch: false });
+    expect(result.lineStates).toEqual([]);
+  });
+});

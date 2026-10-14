@@ -374,6 +374,52 @@ button {
 
 /* ---------- watch pane ---------- */
 
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--vs-border-strong);
+  border-radius: var(--vs-radius);
+  overflow: hidden;
+}
+
+.segmented__item {
+  height: 18px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--vs-text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented__item:hover {
+  background: var(--vs-hover);
+}
+
+.segmented__item--active {
+  background: var(--vs-accent);
+  color: #fff;
+}
+
+.watch__context {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--vs-panel-alt);
+  border-bottom: 1px solid var(--vs-border);
+  font-size: 11px;
+  color: var(--vs-text-muted);
+  flex: 0 0 auto;
+}
+
+.watch__context-line {
+  color: var(--vs-accent);
+  font-weight: 600;
+  font-family: var(--vs-font-mono);
+  white-space: nowrap;
+}
+
 .watch__section {
   border-bottom: 1px solid var(--vs-border);
 }

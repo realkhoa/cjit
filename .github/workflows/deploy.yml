@@ -44,6 +44,10 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Enables Pages with the "GitHub Actions" build type when it is not set
+          # up yet, so the first deploy does not fail on a fresh repository.
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

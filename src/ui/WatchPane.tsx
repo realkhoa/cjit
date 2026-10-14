@@ -2,6 +2,8 @@ import { Fragment, useState } from 'react';
 import type { VarNode } from '@/engine/types';
 import { ANALYSIS_DEBOUNCE_MS, useAppStore } from '@/state/store';
 import { overallTone, pillClass, watchStatusLabel } from '@/ui/status';
+import { selectWatchView } from '@/ui/watchSelect';
+import type { WatchMode } from '@/ui/watchSelect';
 
 function VarRows({ nodes, depth }: { readonly nodes: readonly VarNode[]; readonly depth: number }) {
   return (
@@ -35,19 +37,49 @@ export function WatchPane() {
   const watch = useAppStore((state) => state.watch);
   const runState = useAppStore((state) => state.runState);
   const analysisState = useAppStore((state) => state.analysisState);
+  const cursorLine = useAppStore((state) => state.cursor.line);
 
   const [openLocals, setOpenLocals] = useState(true);
   const [openStack, setOpenStack] = useState(true);
+  const [mode, setMode] = useState<WatchMode>('cursor');
 
   const tone = overallTone(runState, analysisState, watch.status);
+  const view = selectWatchView(watch, cursorLine, mode);
 
   return (
     <>
       <div className="pane__header">
         <span className="pane__title">Watch</span>
+
+        <div className="segmented" role="group" aria-label="Watch scope">
+          <button
+            type="button"
+            className={mode === 'cursor' ? 'segmented__item segmented__item--active' : 'segmented__item'}
+            onClick={() => setMode('cursor')}
+            title="Giá trị của biến tại dòng con trỏ đang đứng"
+          >
+            At cursor
+          </button>
+          <button
+            type="button"
+            className={mode === 'final' ? 'segmented__item segmented__item--active' : 'segmented__item'}
+            onClick={() => setMode('final')}
+            title="Giá trị sau khi chương trình chạy xong"
+          >
+            Final
+          </button>
+        </div>
+
         <span className={pillClass(tone)} title={watch.detail}>
           {watchStatusLabel(watch.status)}
         </span>
+      </div>
+
+      <div className="watch__context" title={view.label}>
+        <span className="watch__context-line">
+          {view.line === null ? 'final' : `Ln ${view.line}`}
+        </span>
+        <span>{view.label}</span>
       </div>
 
       <div className="pane__body">
@@ -59,14 +91,14 @@ export function WatchPane() {
             onClick={() => setOpenLocals((open) => !open)}
           >
             <span className="watch__caret">{openLocals ? '▾' : '▸'}</span>
-            Locals &amp; globals
-            <span className="watch__count">{watch.vars.length}</span>
+            {mode === 'cursor' ? 'Locals at cursor' : 'Locals (final)'}
+            <span className="watch__count">{view.vars.length}</span>
           </button>
 
           {openLocals ? (
-            watch.vars.length === 0 ? (
+            view.vars.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state__title">{watchStatusLabel(watch.status)}</div>
+                <div className="empty-state__title">{view.label}</div>
                 <div>{watch.detail || 'Chưa có giá trị biến nào để hiển thị.'}</div>
               </div>
             ) : (
@@ -79,7 +111,7 @@ export function WatchPane() {
                   </tr>
                 </thead>
                 <tbody>
-                  <VarRows nodes={watch.vars} depth={0} />
+                  <VarRows nodes={view.vars} depth={0} />
                 </tbody>
               </table>
             )
@@ -118,8 +150,8 @@ export function WatchPane() {
       </div>
 
       <div className="watch__footer">
-        realtime debounce {ANALYSIS_DEBOUNCE_MS} ms · engine: {watch.engineLabel} · {watch.steps} steps ·{' '}
-        {watch.elapsedMs} ms · history {watch.historyLength}
+        realtime debounce {ANALYSIS_DEBOUNCE_MS} ms · {watch.engineLabel} · {watch.steps} steps ·{' '}
+        {watch.elapsedMs} ms · {watch.lineStates.length} line snapshots
         {watch.truncated ? ' · truncated (cap hit)' : ''}
       </div>
     </>

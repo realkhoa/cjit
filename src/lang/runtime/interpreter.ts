@@ -79,6 +79,11 @@ export type ExecutionStatus =
   | 'budget'
   | 'unsupported';
 
+export interface LineStateSnapshot {
+  readonly line: number;
+  readonly vars: readonly WatchVariable[];
+}
+
 export interface ExecutionResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -89,6 +94,8 @@ export interface ExecutionResult {
   readonly elapsedMs: number;
   readonly diagnostics: readonly Diagnostic[];
   readonly vars: readonly WatchVariable[];
+  /** Values the first time each line finished running, ascending by line. */
+  readonly lineStates: readonly LineStateSnapshot[];
   readonly frames: readonly StackFrameInfo[];
   readonly historyLength: number;
   /** True when a cap (variables, children, snapshots) dropped something. */
@@ -120,6 +127,8 @@ const DEFAULTS = {
 
 const CHECK_INTERVAL = 2_048;
 const MAX_CHILDREN = 24;
+/** Ceiling on recorded per-line states; a huge program must not grow without bound. */
+const MAX_LINE_STATES = 2_000;
 
 interface Binding {
   readonly name: string;
@@ -328,6 +337,7 @@ class Interpreter {
   private readonly callStack: Array<{ name: string; position: SourcePos }> = [];
   private lastStackSnapshot: StackFrameInfo[] = [];
   private readonly timeline: Array<{ step: number; name: string; scope: string; line: number; value: string }> = [];
+  private readonly lineStates = new Map<number, WatchVariable[]>();
   private readonly limits: Required<Omit<ExecuteOptions, 'stdin' | 'onOutput'>>;
   private readonly onOutput: ((chunk: string, stream: 'stdout' | 'stderr') => void) | undefined;
   private startedAt = Date.now();
@@ -398,6 +408,9 @@ class Interpreter {
 
   private finish(status: ExecutionStatus, exitCode: number | null, detail: string): ExecutionResult {
     const vars = this.limits.collectWatch ? this.collectWatch() : [];
+    const lineStates = [...this.lineStates.entries()]
+      .map(([line, stateVars]) => ({ line, vars: stateVars }))
+      .sort((left, right) => left.line - right.line);
 
     return {
       stdout: this.output,
@@ -409,6 +422,7 @@ class Interpreter {
       elapsedMs: Date.now() - this.startedAt,
       diagnostics: this.diagnostics,
       vars,
+      lineStates: this.limits.collectWatch ? lineStates : [],
       frames: status === 'ok' ? [] : this.lastStackSnapshot,
       historyLength: this.timeline.length,
       truncated: this.truncated,
@@ -708,9 +722,11 @@ class Interpreter {
       }
       case 'decl-stmt':
         this.executeDeclaration(statement.declaration);
+        this.recordLine(statement.start.line);
         return;
       case 'expr-stmt':
         this.evaluate(statement.expression);
+        this.recordLine(statement.start.line);
         return;
       case 'empty':
         return;
@@ -767,6 +783,7 @@ class Interpreter {
         return;
       case 'return': {
         const value = statement.value ? this.evaluate(statement.value) : voidValue();
+        this.recordLine(statement.start.line);
         throw new ControlFlow('return', value);
       }
       case 'break':
@@ -794,8 +811,14 @@ class Interpreter {
       const item = items[index];
       if (!item) continue;
       try {
-        if (isDeclarationKind(item.kind)) this.executeDeclaration(item as Declaration);
-        else this.executeStatement(item as Statement);
+        if (isDeclarationKind(item.kind)) {
+          this.executeDeclaration(item as Declaration);
+          // Declarations in a block go through their own path, so record here too:
+          // otherwise `int total = 0;` would have no state for its own line.
+          this.recordLine(item.start.line);
+        } else {
+          this.executeStatement(item as Statement);
+        }
       } catch (flow) {
         if (flow instanceof ControlFlow && flow.flow === 'goto' && flow.label !== undefined) {
           const target = items.findIndex(
@@ -816,8 +839,12 @@ class Interpreter {
     try {
       const initializer = statement.initializer;
       if (initializer) {
-        if (isDeclarationKind(initializer.kind)) this.executeDeclaration(initializer as Declaration);
-        else this.executeStatement(initializer as Statement);
+        if (isDeclarationKind(initializer.kind)) {
+          this.executeDeclaration(initializer as Declaration);
+          this.recordLine(initializer.start.line);
+        } else {
+          this.executeStatement(initializer as Statement);
+        }
       }
 
       for (;;) {
@@ -2549,8 +2576,7 @@ class Interpreter {
 
   // ------------------------------------------------------------ watch data
 
-  private record(binding: Binding, position: SourcePos): void {
-    if (!this.limits.collectWatch) return;
+  private record(binding: Binding, position: SourcePos): void {    if (!this.limits.collectWatch) return;
     if (this.timeline.length >= this.limits.maxSnapshots) {
       this.truncated = true;
       return;
@@ -2576,6 +2602,22 @@ class Interpreter {
     if (Date.now() - this.startedAt > this.limits.maxMillis) {
       throw new BudgetFault('time', `stopped after ${this.limits.maxMillis} ms (possible infinite loop)`);
     }
+  }
+
+  /**
+   * Captures the variable state the first time a line finishes running, which is
+   * what the watch pane shows for the line the cursor is on. First arrival wins:
+   * that is predictable (and matches what a breakpoint would show), whereas "the
+   * last time the line ran" would report a loop's final counter value.
+   */
+  private recordLine(line: number): void {
+    if (!this.limits.collectWatch) return;
+    if (this.lineStates.has(line)) return;
+    if (this.lineStates.size >= MAX_LINE_STATES) {
+      this.truncated = true;
+      return;
+    }
+    this.lineStates.set(line, this.collectWatch());
   }
 
   private collectWatch(): WatchVariable[] {
