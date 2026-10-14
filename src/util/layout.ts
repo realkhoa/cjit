@@ -10,6 +10,11 @@ export const MAX_BOTTOM_PERCENT = 75;
 export const DEFAULT_RIGHT_PERCENT = 34;
 export const DEFAULT_BOTTOM_PERCENT = 30;
 
+/** Explorer is a fixed-width column, so it is stored in pixels. */
+export const MIN_EXPLORER_WIDTH = 140;
+export const MAX_EXPLORER_WIDTH = 420;
+export const DEFAULT_EXPLORER_WIDTH = 200;
+
 export function clamp(value: number, min: number, max: number): number {
   if (Number.isNaN(value)) return min;
   if (value < min) return min;

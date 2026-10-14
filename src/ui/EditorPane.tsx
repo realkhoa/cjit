@@ -25,6 +25,10 @@ export function EditorPane() {
   const watch = useAppStore((state) => state.watch);
   const inlineValuesEnabled = useAppStore((state) => state.inlineValues);
   const cursorLine = useAppStore((state) => state.cursor.line);
+  const files = useAppStore((state) => state.files);
+  const activeFileId = useAppStore((state) => state.activeFileId);
+  const openFile = useAppStore((state) => state.openFile);
+  const createFile = useAppStore((state) => state.createFile);
 
   // Symbol trail at the caret, from the document symbols the front-end produces.
   const breadcrumb = useMemo(() => {
@@ -198,10 +202,21 @@ export function EditorPane() {
   return (
     <>
       <div className="tabs">
-        <div className="tab tab--active" title={path}>
-          <span className="tab__dot" />
-          <span>{path}</span>
-        </div>
+        {files.map((file) => (
+          <button
+            key={file.id}
+            type="button"
+            className={file.id === activeFileId ? 'tab tab--active' : 'tab'}
+            onClick={() => openFile(file.id)}
+            title={file.path}
+          >
+            <span className="tab__dot" data-language={file.language} />
+            <span>{file.path}</span>
+          </button>
+        ))}
+        <button type="button" className="tab tab--add" onClick={createFile} title="File mới">
+          ＋
+        </button>
       </div>
       <div className="breadcrumb">
         <span>{path}</span>

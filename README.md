@@ -17,9 +17,34 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | **C++** | Fast engine tự resolve `iostream`/`vector`/`string`/`algorithm`/template/range-for — không đẩy sang clang-wasm | ✅ xong |
 | M3 | Watch: giá trị theo **dòng con trỏ**, **timeline scrub**, highlight giá trị đổi, **modal từng iteration** | ✅ xong |
 | M4 | Execution chạy trong **Web Worker** (UI không bao giờ đơ), cancel = terminate worker | ✅ xong |
-| M5 | IntelliSense sâu: signature help, go-to-def, completion theo member/`.h` | ⏳ (đã có bản cơ bản ở M1) |
-| M6 | Polish: examples, share URL, settings, command palette, size tuning | ⏳ |
+| M5 | IntelliSense sâu: signature help, go-to-definition (kể cả nhảy vào header), outline + breadcrumb theo symbol | ✅ xong |
+| M6 | **Quản lý file + lưu trong browser** ✅ · còn: share URL, settings, command palette, size tuning | 🟡 một phần |
 | M7 | `clang + lld` WASM: build C++ thật với libc++/STL | ⏳ |
+
+### Workspace nhiều file, lưu trong browser
+
+Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu vào `localStorage` và tự khôi phục khi mở lại:
+
+- **Tạo / mở / đổi tên / xoá file** (`＋`, bấm đôi để đổi tên, nút 🗑 hỏi xác nhận tại chỗ). Tên file được kiểm tra:
+  rỗng, ký tự lạ, thiếu extension, extension không hỗ trợ, trùng tên, `..` — mỗi lỗi có message riêng, và tên trùng thì
+  tự thêm số (`main.c` → `main2.c`).
+- **Ngôn ngữ suy ra từ extension** (`.c/.h` → C, `.cpp/.cc/.cxx/.hpp/...` → C++), Monaco đổi chế độ theo file.
+- **Tab strip** hiện mọi file đang mở; mỗi file giữ code riêng, engine phân tích đúng file đang mở.
+- **Lưu trữ**: `cjit.files.v2` trong localStorage (ghi debounce 400ms). Workspace một-file kiểu cũ
+  (`cjit.workspace.v1`) được **migrate** tự động, suy ra `main.c`/`main.cpp` từ nội dung — không mất code của bạn.
+  Nếu localStorage đầy, việc lưu thất bại một cách im lặng nhưng không làm hỏng state trong bộ nhớ.
+- File cuối cùng **không xoá được** (nút bị disable và nói rõ lý do), vì workspace rỗng thì không còn chỗ để gõ.
+
+### M5: IntelliSense
+
+- **Signature help**: tự hiện khi gõ `(` hoặc `,`, biết đang ở tham số thứ mấy — tính từ **range của từng argument**
+  nên đúng cả với call lồng nhau và tham số kiểu function pointer (đếm dấu phẩy sẽ sai).
+- **Go to definition**: nhảy tới khai báo của biến/hàm/struct; với `printf` thì mở **`<stdio.h>` như một document thật**
+  (monaco standalone không có `registerTextModelContentProvider`, nên model được tạo theo nhu cầu và cache lại).
+- **Breadcrumb theo symbol thật**: `main.cpp › sum › for` — lấy từ document symbols, không phải text.
+- **Outline** (Ctrl+Shift+O) gồm hàm/biến/typedef/struct (kèm member)/enum (kèm enumerator).
+- **`#include <`** gợi ý toàn bộ header mà engine biết.
+- **Hover** thêm giá trị mà biến có **tại dòng đang trỏ**.
 
 ### M3: đọc dữ liệu chương trình
 

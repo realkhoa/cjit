@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { ConsolePanel } from '@/ui/ConsolePanel';
 import { EditorPane } from '@/ui/EditorPane';
+import { Explorer } from '@/ui/Explorer';
 import { Splitter } from '@/ui/Splitter';
 import { StatusBar } from '@/ui/StatusBar';
 import { TitleBar } from '@/ui/TitleBar';
@@ -23,8 +24,10 @@ function viewportExtent(axis: 'width' | 'height'): number {
 export function App() {
   const rightPercent = useAppStore((state) => state.rightPercent);
   const bottomPercent = useAppStore((state) => state.bottomPercent);
+  const explorerWidth = useAppStore((state) => state.explorerWidth);
   const setRightPercent = useAppStore((state) => state.setRightPercent);
   const setBottomPercent = useAppStore((state) => state.setBottomPercent);
+  const setExplorerWidth = useAppStore((state) => state.setExplorerWidth);
 
   // Negative sign: dragging the divider right/up makes the fixed pane smaller.
   const handleRightDelta = useCallback(
@@ -53,6 +56,14 @@ export function App() {
     [setBottomPercent],
   );
 
+  // The explorer is a fixed width in pixels, so the delta applies directly.
+  const handleExplorerDelta = useCallback(
+    (deltaPx: number) => {
+      setExplorerWidth(useAppStore.getState().explorerWidth + deltaPx);
+    },
+    [setExplorerWidth],
+  );
+
   return (
     <div className="app">
       <TitleBar />
@@ -63,17 +74,25 @@ export function App() {
           className="workspace__row"
           style={{ height: `calc(${100 - bottomPercent}% - var(--vs-splitter))` }}
         >
-          <div
-            className="pane pane--editor"
-            style={{ flex: `0 0 calc(${100 - rightPercent}% - var(--vs-splitter))` }}
-          >
-            <EditorPane />
-          </div>
+          <aside className="pane" style={{ flex: `0 0 ${explorerWidth}px` }}>
+            <Explorer />
+          </aside>
 
-          <Splitter orientation="vertical" label="Resize watch pane" onDelta={handleRightDelta} />
+          <Splitter orientation="vertical" label="Resize explorer" onDelta={handleExplorerDelta} />
 
-          <div className="pane" style={{ flex: '1 1 auto' }}>
-            <WatchPane />
+          <div className="workspace__split">
+            <div
+              className="pane pane--editor"
+              style={{ flex: `0 0 calc(${100 - rightPercent}% - var(--vs-splitter))` }}
+            >
+              <EditorPane />
+            </div>
+
+            <Splitter orientation="vertical" label="Resize watch pane" onDelta={handleRightDelta} />
+
+            <div className="pane" style={{ flex: '1 1 auto' }}>
+              <WatchPane />
+            </div>
           </div>
         </div>
 
