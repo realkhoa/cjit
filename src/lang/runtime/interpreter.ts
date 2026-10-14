@@ -84,6 +84,16 @@ export interface LineStateSnapshot {
   readonly vars: readonly WatchVariable[];
 }
 
+export interface HistoryEntry {
+  /** Interpreter step at which this state was captured. */
+  readonly step: number;
+  readonly line: number;
+  readonly scope: string;
+  /** The variable whose assignment produced this state, for the scrubber label. */
+  readonly name: string;
+  readonly vars: readonly WatchVariable[];
+}
+
 export interface ExecutionResult {
   readonly stdout: string;
   readonly stderr: string;
@@ -96,6 +106,8 @@ export interface ExecutionResult {
   readonly vars: readonly WatchVariable[];
   /** Values the first time each line finished running, ascending by line. */
   readonly lineStates: readonly LineStateSnapshot[];
+  /** Ordered states captured on declarations and assignments, for scrubbing. */
+  readonly history: readonly HistoryEntry[];
   readonly frames: readonly StackFrameInfo[];
   readonly historyLength: number;
   /** True when a cap (variables, children, snapshots) dropped something. */
@@ -120,7 +132,9 @@ const DEFAULTS = {
   maxSteps: 8_000_000,
   maxMillis: 3_000,
   maxOutputChars: 1_000_000,
-  maxSnapshots: 4_096,
+  // Each recorded entry now holds a full variable state, so the cap is much
+  // lower than a flat log would need: 400 states is a long, scrubbable history.
+  maxSnapshots: 400,
   maxRecursionDepth: 256,
   maxVars: 200,
 } as const;
@@ -336,7 +350,7 @@ class Interpreter {
   private stdinCursor = 0;
   private readonly callStack: Array<{ name: string; position: SourcePos }> = [];
   private lastStackSnapshot: StackFrameInfo[] = [];
-  private readonly timeline: Array<{ step: number; name: string; scope: string; line: number; value: string }> = [];
+  private readonly history: HistoryEntry[] = [];
   private readonly lineStates = new Map<number, WatchVariable[]>();
   private readonly limits: Required<Omit<ExecuteOptions, 'stdin' | 'onOutput'>>;
   private readonly onOutput: ((chunk: string, stream: 'stdout' | 'stderr') => void) | undefined;
@@ -423,8 +437,9 @@ class Interpreter {
       diagnostics: this.diagnostics,
       vars,
       lineStates: this.limits.collectWatch ? lineStates : [],
+      history: this.limits.collectWatch ? [...this.history] : [],
       frames: status === 'ok' ? [] : this.lastStackSnapshot,
-      historyLength: this.timeline.length,
+      historyLength: this.history.length,
       truncated: this.truncated,
     };
   }
@@ -2576,18 +2591,18 @@ class Interpreter {
 
   // ------------------------------------------------------------ watch data
 
-  private record(binding: Binding, position: SourcePos): void {    if (!this.limits.collectWatch) return;
-    if (this.timeline.length >= this.limits.maxSnapshots) {
+  private record(binding: Binding, position: SourcePos): void {
+    if (!this.limits.collectWatch) return;
+    if (this.history.length >= this.limits.maxSnapshots) {
       this.truncated = true;
       return;
     }
-    const value = this.load(binding.type, binding.address);
-    this.timeline.push({
+    this.history.push({
       step: this.steps,
-      name: binding.name,
-      scope: binding.scopeName,
       line: position.line,
-      value: formatValue(value, this.memory),
+      scope: binding.scopeName,
+      name: binding.name,
+      vars: this.collectWatch(),
     });
   }
 

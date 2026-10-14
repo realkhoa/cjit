@@ -408,3 +408,62 @@ describe('interpreter: per-line state (watch at the cursor line)', () => {
     expect(result.lineStates).toEqual([]);
   });
 });
+
+describe('interpreter: execution history (timeline scrubber)', () => {
+  it('captures a full state for each declaration and assignment', () => {
+    const source = [
+      'int main(void) {',
+      '    int a = 1;',
+      '    a = 2;',
+      '    a += 3;',
+      '    return 0;',
+      '}',
+    ].join('\n');
+    const result = run(source);
+
+    const trace = result.history.map(
+      (entry) => `${entry.name}@${entry.line}=${entry.vars.find((item) => item.name === 'a')?.value}`,
+    );
+    expect(trace[0]).toBe('a@2=1');
+    expect(trace[1]).toBe('a@3=2');
+    expect(trace[2]).toBe('a@4=5');
+    expect(result.historyLength).toBe(result.history.length);
+  });
+
+  it('records inside loops, one state per assignment', () => {
+    const source = [
+      'int main(void) {',
+      '    int total = 0;',
+      '    for (int i = 0; i < 3; i++) {',
+      '        total += i;',
+      '    }',
+      '    return 0;',
+      '}',
+    ].join('\n');
+    const result = run(source);
+
+    const totals = result.history
+      .filter((entry) => entry.name === 'total')
+      .map((entry) => entry.vars.find((item) => item.name === 'total')?.value);
+    expect(totals).toEqual(['0', '0', '1', '3']);
+  });
+
+  it('stops at the snapshot cap and flags the truncation', () => {
+    const source = [
+      'int main(void) {',
+      '    int total = 0;',
+      '    for (int i = 0; i < 50; i++) { total += i; }',
+      '    return 0;',
+      '}',
+    ].join('\n');
+    const result = run(source, { maxSnapshots: 5 });
+
+    expect(result.history).toHaveLength(5);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('keeps history out of a plain run', () => {
+    const result = run('int main(void) { int a = 1; a = 2; return 0; }', { collectWatch: false });
+    expect(result.history).toEqual([]);
+  });
+});

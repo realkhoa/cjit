@@ -420,6 +420,36 @@ button {
   white-space: nowrap;
 }
 
+.watch__changed-count {
+  margin-left: auto;
+  color: var(--vs-changed);
+  white-space: nowrap;
+}
+
+.timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--vs-panel-alt);
+  border-bottom: 1px solid var(--vs-border);
+  flex: 0 0 auto;
+}
+
+.timeline__slider {
+  flex: 1 1 auto;
+  min-width: 40px;
+  height: 4px;
+  accent-color: var(--vs-accent);
+}
+
+.timeline__position {
+  font-family: var(--vs-font-mono);
+  font-size: 11px;
+  color: var(--vs-text-dim);
+  white-space: nowrap;
+}
+
 .watch__section {
   border-bottom: 1px solid var(--vs-border);
 }

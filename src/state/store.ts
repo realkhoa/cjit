@@ -255,9 +255,23 @@ const analyzer = new DebouncedAnalyzer({
     const { path } = useAppStore.getState();
     // Always the fast engine: the realtime pane cannot wait for a clang build.
     const engine = getEngine(WATCH_ENGINE_ID);
-    const snapshot = await engine.watch({ code, file: path }, signal);
-    if (signal.aborted) return;
-    useAppStore.setState({ watch: snapshot });
+    try {
+      const snapshot = await engine.watch({ code, file: path }, signal);
+      if (signal.aborted) return;
+      useAppStore.setState({ watch: snapshot });
+    } catch (error) {
+      // An engine crash must be visible, never silent.
+      if (signal.aborted) return;
+      const message = error instanceof Error ? error.message : String(error);
+      useAppStore.setState({
+        watch: emptyWatch({
+          engine: WATCH_ENGINE_ID,
+          engineLabel: engine.label,
+          status: 'unsupported',
+          detail: `engine failed: ${message}`,
+        }),
+      });
+    }
   },
   onBusyChange: (busy) => {
     useAppStore.setState({ analysisState: busy ? 'analyzing' : 'idle' });

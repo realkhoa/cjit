@@ -28,9 +28,19 @@ import type { WatchVariable } from '@/lang/runtime/interpreter';
  */
 
 /** Realtime passes are cheap: the user is still typing. */
-const WATCH_LIMITS = { maxSteps: 1_500_000, maxMillis: 1_200, maxOutputChars: 64_000 } as const;
+export const WATCH_LIMITS = {
+  maxSteps: 1_500_000,
+  maxMillis: 1_200,
+  maxOutputChars: 64_000,
+  maxSnapshots: 400,
+} as const;
 /** Run is the user's explicit "execute this" and gets room to finish. */
-const RUN_LIMITS = { maxSteps: 30_000_000, maxMillis: 30_000, maxOutputChars: 1_000_000 } as const;
+export const RUN_LIMITS = {
+  maxSteps: 30_000_000,
+  maxMillis: 30_000,
+  maxOutputChars: 1_000_000,
+  maxSnapshots: 400,
+} as const;
 
 function toVarNode(variable: WatchVariable): VarNode {
   return {
@@ -45,7 +55,7 @@ function toVarNode(variable: WatchVariable): VarNode {
   };
 }
 
-function statusOf(result: ExecutionResult): WatchStatus {
+export function statusOf(result: ExecutionResult): WatchStatus {
   switch (result.status) {
     case 'ok':
       return 'ok';
@@ -60,7 +70,7 @@ function statusOf(result: ExecutionResult): WatchStatus {
   }
 }
 
-function detailOf(result: ExecutionResult): string {
+export function detailOf(result: ExecutionResult): string {
   const parts: string[] = [];
   switch (result.status) {
     case 'ok':
@@ -83,8 +93,11 @@ function detailOf(result: ExecutionResult): string {
   return parts.join(' · ');
 }
 
-/** Nothing ran, so there are no values: only diagnostics. */
-function compileErrorSnapshot(analysis: AnalysisResult): WatchSnapshot {
+/**
+ * Nothing ran, so there are no values: only diagnostics. Exported because the
+ * Web Worker handler builds the same snapshot.
+ */
+export function buildCompileErrorSnapshot(analysis: AnalysisResult): WatchSnapshot {
   return {
     engine: 'fast',
     engineLabel: 'Fast engine',
@@ -98,10 +111,20 @@ function compileErrorSnapshot(analysis: AnalysisResult): WatchSnapshot {
     historyLength: 0,
     diagnostics: analysis.diagnostics,
     lineStates: [],
+    history: [],
   };
 }
 
-function snapshotFrom(analysis: AnalysisResult, result: ExecutionResult): WatchSnapshot {  return {
+/**
+ * Turns an execution into the engine's snapshot. Exported because the Web Worker
+ * handler must produce exactly the same shape as the in-process engine - one
+ * source of truth, whichever thread did the work.
+ */
+export function buildWatchSnapshot(
+  analysis: AnalysisResult,
+  result: ExecutionResult,
+): WatchSnapshot {
+  return {
     engine: 'fast',
     engineLabel: 'Fast engine',
     status: statusOf(result),
@@ -117,6 +140,24 @@ function snapshotFrom(analysis: AnalysisResult, result: ExecutionResult): WatchS
       line: state.line,
       vars: state.vars.map(toVarNode),
     })),
+    history: result.history.map((entry) => ({
+      step: entry.step,
+      line: entry.line,
+      scope: entry.scope,
+      name: entry.name,
+      vars: entry.vars.map(toVarNode),
+    })),
+  };
+}
+
+export function buildRunOutcome(analysis: AnalysisResult, result: ExecutionResult): RunOutcome {
+  return {
+    status: statusOf(result),
+    detail: detailOf(result),
+    exitCode: result.exitCode,
+    elapsedMs: result.elapsedMs,
+    steps: result.steps,
+    diagnostics: [...analysis.diagnostics, ...result.diagnostics],
   };
 }
 
@@ -130,10 +171,10 @@ export function createFastEngine(): Engine {
       // Completion/hover read the symbol table published for this snapshot.
       publishAnalysis(analysis);
 
-      if (analysis.errorCount > 0) return compileErrorSnapshot(analysis);
+      if (analysis.errorCount > 0) return buildCompileErrorSnapshot(analysis);
 
       const result = execute(analysis.unit, { ...WATCH_LIMITS, collectWatch: true });
-      return snapshotFrom(analysis, result);
+      return buildWatchSnapshot(analysis, result);
     },
 
     async run(source, stdin, sink: RunSink, signal): Promise<RunOutcome> {
@@ -142,7 +183,7 @@ export function createFastEngine(): Engine {
 
       if (analysis.errorCount > 0) {
         sink.stderr(`Build failed: ${summarize(analysis.diagnostics)}\n`);
-        sink.watch(compileErrorSnapshot(analysis));
+        sink.watch(buildCompileErrorSnapshot(analysis));
         return {
           status: 'compile-error',
           detail: 'Build failed — see the Problems tab',
@@ -175,7 +216,7 @@ export function createFastEngine(): Engine {
         },
       });
 
-      sink.watch(snapshotFrom(analysis, result));
+      sink.watch(buildWatchSnapshot(analysis, result));
 
       return {
         status: statusOf(result),

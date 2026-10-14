@@ -42,9 +42,18 @@ export function WatchPane() {
   const [openLocals, setOpenLocals] = useState(true);
   const [openStack, setOpenStack] = useState(true);
   const [mode, setMode] = useState<WatchMode>('cursor');
+  const [historyIndex, setHistoryIndex] = useState(0);
 
   const tone = overallTone(runState, analysisState, watch.status);
-  const view = selectWatchView(watch, cursorLine, mode);
+  const view = selectWatchView(watch, { mode, cursorLine, historyIndex });
+
+  const lastHistoryIndex = Math.max(watch.history.length - 1, 0);
+
+  const enterTimeline = (): void => {
+    setMode('timeline');
+    // Start at the most recent moment; the user scrubs back from there.
+    setHistoryIndex(lastHistoryIndex);
+  };
 
   return (
     <>
@@ -62,6 +71,14 @@ export function WatchPane() {
           </button>
           <button
             type="button"
+            className={mode === 'timeline' ? 'segmented__item segmented__item--active' : 'segmented__item'}
+            onClick={enterTimeline}
+            title="Tua lại lịch sử thực thi theo từng lần gán biến"
+          >
+            Timeline
+          </button>
+          <button
+            type="button"
             className={mode === 'final' ? 'segmented__item segmented__item--active' : 'segmented__item'}
             onClick={() => setMode('final')}
             title="Giá trị sau khi chương trình chạy xong"
@@ -75,11 +92,35 @@ export function WatchPane() {
         </span>
       </div>
 
+      {mode === 'timeline' ? (
+        <div className="timeline">
+          <input
+            type="range"
+            className="timeline__slider"
+            min={0}
+            max={lastHistoryIndex}
+            step={1}
+            value={Math.min(historyIndex, lastHistoryIndex)}
+            disabled={watch.history.length === 0}
+            aria-label="Execution timeline"
+            onChange={(event) => setHistoryIndex(Number.parseInt(event.target.value, 10))}
+          />
+          <span className="timeline__position">
+            {watch.history.length === 0
+              ? 'no history'
+              : `${Math.min(historyIndex, lastHistoryIndex) + 1}/${watch.history.length}`}
+          </span>
+        </div>
+      ) : null}
+
       <div className="watch__context" title={view.label}>
         <span className="watch__context-line">
           {view.line === null ? 'final' : `Ln ${view.line}`}
         </span>
         <span>{view.label}</span>
+        {view.changedCount > 0 ? (
+          <span className="watch__changed-count">{view.changedCount} changed</span>
+        ) : null}
       </div>
 
       <div className="pane__body">
@@ -91,7 +132,7 @@ export function WatchPane() {
             onClick={() => setOpenLocals((open) => !open)}
           >
             <span className="watch__caret">{openLocals ? '▾' : '▸'}</span>
-            {mode === 'cursor' ? 'Locals at cursor' : 'Locals (final)'}
+            {mode === 'timeline' ? 'Locals at step' : mode === 'cursor' ? 'Locals at cursor' : 'Locals (final)'}
             <span className="watch__count">{view.vars.length}</span>
           </button>
 
@@ -151,7 +192,7 @@ export function WatchPane() {
 
       <div className="watch__footer">
         realtime debounce {ANALYSIS_DEBOUNCE_MS} ms · {watch.engineLabel} · {watch.steps} steps ·{' '}
-        {watch.elapsedMs} ms · {watch.lineStates.length} line snapshots
+        {watch.elapsedMs} ms · {watch.lineStates.length} line snapshots · {watch.history.length} history steps
         {watch.truncated ? ' · truncated (cap hit)' : ''}
       </div>
     </>

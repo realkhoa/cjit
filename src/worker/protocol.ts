@@ -1,49 +1,38 @@
 import type { Diagnostic, RunOutcome, WatchSnapshot } from '@/engine/types';
 
 /**
- * Main-thread <-> worker message contract.
+ * Main-thread <-> worker protocol.
  *
- * The heavy engines (M2 interpreter, M7 clang) run in a Web Worker so a runaway
- * program can never freeze the editor, and a stale edit can be cancelled. M0
- * defines the contract; M4 starts using it. Note that `SharedArrayBuffer` is
- * unavailable on GitHub Pages (no COOP/COEP headers), so this stays
- * `postMessage`-only - no shared memory, no pthreads.
+ * The engines execute arbitrary user programs, so they run in a Web Worker: a
+ * runaway loop must not be able to freeze the editor. Note that
+ * `SharedArrayBuffer` is unavailable on GitHub Pages (no COOP/COEP headers), so
+ * this stays `postMessage`-only - and because the worker executes synchronously,
+ * cancelling means terminating it, not asking it to stop.
  */
 
-export interface AnalysisLimits {
-  /** Interpreter step budget; exceeded -> status `budget`. */
-  readonly maxSteps: number;
-  /** Wall-clock budget in ms; exceeded -> status `timeout`. */
-  readonly maxMillis: number;
-  /** Maximum recorded variable snapshots. */
-  readonly maxSnapshots: number;
+export interface WatchRequest {
+  readonly kind: 'watch';
+  readonly requestId: number;
+  readonly code: string;
+  readonly file: string;
 }
 
-export const DEFAULT_LIMITS: AnalysisLimits = {
-  maxSteps: 5_000_000,
-  maxMillis: 2_000,
-  maxSnapshots: 4_096,
-};
+export interface RunRequest {
+  readonly kind: 'run';
+  readonly requestId: number;
+  readonly code: string;
+  readonly file: string;
+  readonly stdin: string;
+}
 
-export type WorkerRequest =
-  | {
-      readonly kind: 'analyze';
-      readonly requestId: number;
-      readonly code: string;
-      readonly limits: AnalysisLimits;
-    }
-  | {
-      readonly kind: 'run';
-      readonly requestId: number;
-      readonly code: string;
-      readonly stdin: string;
-      readonly limits: AnalysisLimits;
-    }
-  | { readonly kind: 'cancel'; readonly targetId: number };
+export type WorkerRequest = WatchRequest | RunRequest;
 
 export type WorkerResponse =
-  | { readonly kind: 'diagnostics'; readonly requestId: number; readonly diagnostics: readonly Diagnostic[] }
   | { readonly kind: 'watch'; readonly requestId: number; readonly snapshot: WatchSnapshot }
   | { readonly kind: 'stdout'; readonly requestId: number; readonly chunk: string }
   | { readonly kind: 'stderr'; readonly requestId: number; readonly chunk: string }
-  | { readonly kind: 'done'; readonly requestId: number; readonly outcome: RunOutcome };
+  | { readonly kind: 'done'; readonly requestId: number; readonly outcome: RunOutcome }
+  | { readonly kind: 'failure'; readonly requestId: number; readonly message: string };
+
+/** The worker never sends analysis structures: only cloneable plain data. */
+export type WorkerDiagnostics = readonly Diagnostic[];

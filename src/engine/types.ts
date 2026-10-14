@@ -75,6 +75,18 @@ export interface LineState {
   readonly vars: readonly VarNode[];
 }
 
+/**
+ * One scrubbable moment in the program's life: the full variable state captured
+ * when `name` was declared or assigned on `line`.
+ */
+export interface WatchHistoryEntry {
+  readonly step: number;
+  readonly line: number;
+  readonly scope: string;
+  readonly name: string;
+  readonly vars: readonly VarNode[];
+}
+
 export interface WatchSnapshot {
   readonly engine: EngineId | null;
   readonly engineLabel: string;
@@ -93,6 +105,8 @@ export interface WatchSnapshot {
   readonly diagnostics: readonly Diagnostic[];
   /** Per-line snapshots, ascending by line. Empty for engines that keep none. */
   readonly lineStates: readonly LineState[];
+  /** Ordered assignment states for the timeline scrubber. */
+  readonly history: readonly WatchHistoryEntry[];
 }
 
 export interface RunOutcome {
@@ -145,6 +159,7 @@ export function emptyWatch(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
     historyLength: 0,
     diagnostics: [],
     lineStates: [],
+    history: [],
     ...patch,
   };
 }
