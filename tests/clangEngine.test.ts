@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createClangEngine } from '@/engine/clangEngine';
+import { createClangEngine, defaultToolchainBase } from '@/engine/clangEngine';
 import type { RunSink, WatchSnapshot } from '@/engine/types';
 import type { ClangRequest, ClangResponse } from '@/worker/clangProtocol';
 
@@ -64,6 +64,28 @@ function collectingSink(): RunSink & { out: string[]; err: string[]; snapshots: 
 }
 
 const PROGRAM = 'int main() { return 0; }\n';
+
+describe('clang engine: toolchain URL', () => {
+  /**
+   * The site is deployed under a sub-path with `base: './'`, so the toolchain must
+   * be resolved against the document, not the worker script - otherwise clang
+   * would be requested from /assets/ and Run would fail on the live site only.
+   */
+  it('resolves the toolchain next to the page, not the worker', () => {
+    const original = (globalThis as { document?: unknown }).document;
+    try {
+      (globalThis as { document?: unknown }).document = {
+        baseURI: 'https://realkhoa.github.io/cjit/',
+      };
+      expect(defaultToolchainBase()).toBe('https://realkhoa.github.io/cjit/toolchain/');
+
+      (globalThis as { document?: unknown }).document = { baseURI: 'http://127.0.0.1:5173/' };
+      expect(defaultToolchainBase()).toBe('http://127.0.0.1:5173/toolchain/');
+    } finally {
+      (globalThis as { document?: unknown }).document = original;
+    }
+  });
+});
 
 describe('clang engine: the realtime pane never uses clang', () => {
   it('serves watch() from the fast engine, not the compiler', async () => {
