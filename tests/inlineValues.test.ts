@@ -125,6 +125,34 @@ describe('inlineDecorationSpecs', () => {
     expect(specs[0]?.content.trim()).toBe('// total = 6');
   });
 
+  it('lines the comments up in a column so the code stays readable', () => {
+    const watch = snapshot([
+      { line: 2, vars: [variable('a', '1')] },
+      { line: 3, vars: [variable('b', '2')] },
+    ]);
+
+    // Line 2 is short, line 3 is long.
+    const specs = inlineDecorationSpecs(watch, (line) => (line === 2 ? 10 : 100));
+    const nbsp = '\u00A0';
+
+    // Short line: the comment starts at the fixed column (60), i.e. 49 padding
+    // cells after a 10-character line ending at column 11.
+    expect(specs[0]?.content.startsWith(nbsp.repeat(49))).toBe(true);
+    expect(specs[0]?.content.trimStart().startsWith('//')).toBe(true);
+
+    // Long line: it cannot reach column 60, so it keeps a minimum gap of 4.
+    expect(specs[1]?.content.startsWith(`${nbsp.repeat(4)}//`)).toBe(true);
+  });
+
+  it('pads with non-breaking spaces so HTML cannot collapse the gap', () => {
+    const watch = snapshot([{ line: 2, vars: [variable('a', '1')] }]);
+
+    const content = inlineDecorationSpecs(watch, () => 5)[0]?.content ?? '';
+    // Ordinary spaces would be collapsed by the browser; U+00A0 is not.
+    expect(content).not.toContain('  ');
+    expect(content).toContain('\u00A0');
+  });
+
   it('styles produced values differently from in-scope values', () => {
     const watch = snapshot([
       { line: 2, vars: [variable('a', '1')] },

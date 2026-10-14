@@ -113,20 +113,43 @@ export interface InlineDecorationSpec {
   readonly className: string;
 }
 
+/**
+ * Column where the inline comment starts when the code is short, and the minimum
+ * gap after the code when it is not. A single fixed column is what makes a column
+ * of overlays scannable instead of a ragged edge glued to the code.
+ */
+const COMMENT_COLUMN = 60;
+const MIN_GAP = 4;
+
+/**
+ * Non-breaking spaces, not ordinary ones.
+ *
+ * Injected text ends up in a DOM span, and HTML collapses runs of ordinary
+ * spaces depending on the container's `white-space`. That is not worth relying
+ * on for alignment, and U+00A0 is never collapsed.
+ */
+const PAD = '\u00A0';
+
 export function inlineDecorationSpecs(
   watch: WatchSnapshot,
   lineLength: (line: number) => number,
 ): InlineDecorationSpec[] {
-  return inlineValuesFor(watch).map((overlay) => ({
-    line: overlay.line,
-    startColumn: 1,
-    endColumn: Math.max(lineLength(overlay.line), 0) + 1,
-    content: `  ${overlayText(overlay)}`,
-    className:
-      overlay.kind === 'changed'
-        ? 'cjit-inline-value'
-        : 'cjit-inline-value cjit-inline-value--scope',
-  }));
+  return inlineValuesFor(watch).map((overlay) => {
+    const endColumn = Math.max(lineLength(overlay.line), 0) + 1;
+    const commentColumn = Math.max(endColumn + MIN_GAP, COMMENT_COLUMN);
+    const padding = PAD.repeat(Math.max(commentColumn - endColumn, 1));
+
+    return {
+      line: overlay.line,
+      startColumn: 1,
+      endColumn,
+      content: `${padding}${overlayText(overlay)}`,
+      className:
+        overlay.kind === 'changed'
+          ? 'cjit-inline-value'
+          : 'cjit-inline-value cjit-inline-value--scope',
+    };
+  });
 }
 
 /** The most recent state for a line, used by the hover/tooltip path. */
