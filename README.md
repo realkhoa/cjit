@@ -15,11 +15,31 @@ Editor C/C++ chạy **hoàn toàn trên client** (không backend), deploy đư�
 | **M1** | Preprocessor + lexer + parser + symbol table; markers, Problems, completion & hover theo scope | ✅ xong |
 | **M2** | Interpreter thật (memory model, con trỏ, struct, malloc, printf/scanf), Run → console stdout/stderr/exit code, budget chống treo | ✅ xong |
 | **C++** | Fast engine tự resolve `iostream`/`vector`/`string`/`algorithm`/template/range-for — không đẩy sang clang-wasm | ✅ xong |
-| M3 | Watch: đã có giá trị theo **dòng con trỏ**; còn timeline scrub + highlight giá trị đổi | 🟡 một phần |
-| M4 | Chạy pipeline debounce trong Web Worker, cancel giữa chừng | ⏳ |
+| M3 | Watch: giá trị theo **dòng con trỏ**, **timeline scrub**, highlight giá trị đổi, **modal từng iteration** | ✅ xong |
+| M4 | Execution chạy trong **Web Worker** (UI không bao giờ đơ), cancel = terminate worker | ✅ xong |
 | M5 | IntelliSense sâu: signature help, go-to-def, completion theo member/`.h` | ⏳ (đã có bản cơ bản ở M1) |
 | M6 | Polish: examples, share URL, settings, command palette, size tuning | ⏳ |
 | M7 | `clang + lld` WASM: build C++ thật với libc++/STL | ⏳ |
+
+### M3: đọc dữ liệu chương trình
+
+- **Inline value overlay**: sau mỗi dòng đã chạy, Monaco hiện `// total = 6, i = 3` ngay cuối dòng — chỉ
+  hiện **biến mà dòng đó tạo ra/thay đổi**, tối đa 3 tên kèm `(+k)` nếu nhiều hơn, nên dòng vẫn đọc được.
+  Bật/tắt bằng nút **Inline values** trên toolbar. Dòng chưa chạy thì không có overlay (không bịa).
+- **Watch pane 3 chế độ**: `At cursor` (mặc định, state tại dòng con trỏ), `Timeline` (scrub qua từng lần gán
+  biến, có nhãn `step 20 · total on line 4`), `Final` (state sau khi chạy xong).
+- **Highlight giá trị đổi**: biến vừa đổi (hoặc vừa xuất hiện) được tô đỏ, kèm bộ đếm `n changed`.
+- **Modal từng iteration**: khi dòng con trỏ nằm trong vòng lặp, pane hiện chip `⟳ 3 iterations`; bấm vào mở
+  bảng — mỗi iteration một dòng, mỗi biến một cột, ô đổi giá trị tô đỏ. Bấm một dòng để nhảy thẳng vào state
+  đó trong timeline.
+
+### M4: không bao giờ đơ tab
+
+Engine chạy trong **Web Worker**: một `while(1)` chỉ treo worker, không treo editor. Vì worker thực thi đồng
+bộ nên **cancel = terminate worker** (không thể "nhờ" nó dừng). Hai worker riêng biệt — một cho realtime, một
+cho Run — nên gõ phím không giết Run và Run không chặn pane realtime. Parse vẫn chạy ở main thread (vài ms) để
+completion/hover/marker luôn mượt; worker là nguồn chân lý cho **giá trị**. Môi trường không có Worker thì tự
+fallback về engine in-process, và engine crash được hiện lên status bar chứ không im lặng.
 
 ### M2: chương trình chạy thật
 

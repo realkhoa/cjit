@@ -1,6 +1,8 @@
 import { Fragment, useState } from 'react';
 import type { VarNode } from '@/engine/types';
 import { ANALYSIS_DEBOUNCE_MS, useAppStore } from '@/state/store';
+import { IterationsDialog } from '@/ui/IterationsDialog';
+import { buildIterationTable, isLoopLine } from '@/ui/iterationTable';
 import { overallTone, pillClass, watchStatusLabel } from '@/ui/status';
 import { selectWatchView } from '@/ui/watchSelect';
 import type { WatchMode } from '@/ui/watchSelect';
@@ -43,9 +45,11 @@ export function WatchPane() {
   const [openStack, setOpenStack] = useState(true);
   const [mode, setMode] = useState<WatchMode>('cursor');
   const [historyIndex, setHistoryIndex] = useState(0);
+  const [iterationsOpen, setIterationsOpen] = useState(false);
 
   const tone = overallTone(runState, analysisState, watch.status);
   const view = selectWatchView(watch, { mode, cursorLine, historyIndex });
+  const cursorIterations = buildIterationTable(watch.history, cursorLine);
 
   const lastHistoryIndex = Math.max(watch.history.length - 1, 0);
 
@@ -118,10 +122,33 @@ export function WatchPane() {
           {view.line === null ? 'final' : `Ln ${view.line}`}
         </span>
         <span>{view.label}</span>
+        {isLoopLine(cursorIterations) ? (
+          <button
+            type="button"
+            className="chip"
+            onClick={() => setIterationsOpen(true)}
+            title="Xem dữ liệu của từng iteration tại dòng này"
+          >
+            ⟳ {cursorIterations.rows.length} iterations
+          </button>
+        ) : null}
         {view.changedCount > 0 ? (
           <span className="watch__changed-count">{view.changedCount} changed</span>
         ) : null}
       </div>
+
+      {iterationsOpen ? (
+        <IterationsDialog
+          line={cursorLine}
+          history={watch.history}
+          onSelect={(index) => {
+            setMode('timeline');
+            setHistoryIndex(index);
+            setIterationsOpen(false);
+          }}
+          onClose={() => setIterationsOpen(false)}
+        />
+      ) : null}
 
       <div className="pane__body">
         <section className="watch__section">

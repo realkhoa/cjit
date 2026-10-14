@@ -64,6 +64,8 @@ export interface AppState {
   readonly rightPercent: number;
   readonly bottomPercent: number;
   readonly cursor: CursorInfo;
+  /** Show inline value overlays after each executed line. */
+  readonly inlineValues: boolean;
 
   setCodeFromEditor(code: string): void;
   loadExample(path: string, language: 'c' | 'cpp', code: string): void;
@@ -72,6 +74,7 @@ export interface AppState {
   appendOutput(kind: OutputKind, text: string): void;
   clearOutput(): void;
   setCursor(cursor: CursorInfo): void;
+  toggleInlineValues(): void;
   setEngineId(id: EngineId): void;
   setRightPercent(percent: number): void;
   setBottomPercent(percent: number): void;
@@ -115,6 +118,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     MAX_BOTTOM_PERCENT,
   ),
   cursor: { line: 1, column: 1, selected: 0 },
+  inlineValues: true,
 
   setCodeFromEditor(code) {
     set({ code });
@@ -153,6 +157,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setCursor(cursor) {
     set({ cursor });
+  },
+
+  toggleInlineValues() {
+    set((state) => ({ inlineValues: !state.inlineValues }));
   },
 
   setEngineId(id) {

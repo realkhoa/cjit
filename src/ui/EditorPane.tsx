@@ -4,6 +4,7 @@ import { registerKeywordCompletions, registerSymbolCompletions } from '@/editor/
 import { monaco } from '@/editor/monacoSetup';
 import { bindEditor } from '@/editor/navigation';
 import { useAppStore } from '@/state/store';
+import { inlineValuesFor, overlayText } from '@/ui/inlineValues';
 import { EDITOR_THEME_DARK } from '@/ui/theme/monacoTheme';
 
 type Editor = Monaco.editor.IStandaloneCodeEditor;
@@ -11,12 +12,15 @@ type Editor = Monaco.editor.IStandaloneCodeEditor;
 export function EditorPane() {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
+  const decorationsRef = useRef<Monaco.editor.IEditorDecorationsCollection | null>(null);
 
   const language = useAppStore((state) => state.language);
   const code = useAppStore((state) => state.code);
   const codeRevision = useAppStore((state) => state.codeRevision);
   const path = useAppStore((state) => state.path);
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
+  const watch = useAppStore((state) => state.watch);
+  const inlineValuesEnabled = useAppStore((state) => state.inlineValues);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -90,6 +94,8 @@ export function EditorPane() {
     return () => {
       contentSub.dispose();
       cursorSub.dispose();
+      decorationsRef.current?.clear();
+      decorationsRef.current = null;
       bindEditor(null);
       editor.dispose();
       editorRef.current = null;
@@ -110,6 +116,40 @@ export function EditorPane() {
     if (!editor) return;
     if (editor.getValue() !== code) editor.setValue(code);
   }, [code, codeRevision]);
+
+  // Inline value overlays: `// total = 6` rendered after each executed line.
+  // They come from the interpreter's per-line states, so a line only shows values
+  // if it actually ran, and only values that line produced.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+
+    let collection = decorationsRef.current;
+    if (!collection) {
+      collection = editor.createDecorationsCollection([]);
+      decorationsRef.current = collection;
+    }
+
+    if (!inlineValuesEnabled) {
+      collection.clear();
+      return;
+    }
+
+    collection.set(
+      inlineValuesFor(watch).map((overlay) => ({
+        range: new monaco.Range(overlay.line, 1, overlay.line, 1),
+        options: {
+          after: {
+            content: `   ${overlayText(overlay)}`,
+            inlineClassName: 'cjit-inline-value',
+          },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          description: 'cjit inline value',
+        },
+      })),
+    );
+  }, [watch, inlineValuesEnabled]);
 
   // Front-end diagnostics become Monaco markers, so errors are visible in place.
   useEffect(() => {

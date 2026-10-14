@@ -11,6 +11,8 @@ export function Toolbar() {
   const clearOutput = useAppStore((state) => state.clearOutput);
   const loadExample = useAppStore((state) => state.loadExample);
   const setEngineId = useAppStore((state) => state.setEngineId);
+  const inlineValues = useAppStore((state) => state.inlineValues);
+  const toggleInlineValues = useAppStore((state) => state.toggleInlineValues);
   const path = useAppStore((state) => state.path);
 
   const running = runState === 'running';
@@ -85,6 +87,16 @@ export function Toolbar() {
 
       <button type="button" className="btn" onClick={clearOutput} title="Xoá nội dung console">
         Clear console
+      </button>
+
+      <button
+        type="button"
+        className={inlineValues ? 'btn btn--toggled' : 'btn'}
+        onClick={toggleInlineValues}
+        aria-pressed={inlineValues}
+        title="Hiện/ẩn giá trị biến ngay sau mỗi dòng code đã chạy"
+      >
+        Inline values
       </button>
 
       <div className="titlebar__spacer" />
