@@ -20,7 +20,7 @@ console below, VS 2022 dark theme. Two engines:
 | Deploy | GitHub Actions → Pages (`worktree main`, `enablement: true`) |
 | Tests | **733 passing, 59 files** (`npm test`) |
 | Typecheck / build | both clean (`npm run typecheck`, `npm run build`) |
-| Last deploy | CI green, `index-CnJzTQkl.js` |
+| Last deploy | CI green, `index-Bi_WlZvc.js` |
 
 ## 2. The active goal (this is the job)
 
