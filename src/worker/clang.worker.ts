@@ -1,5 +1,10 @@
 import { parseClangDiagnostics, stripAnsi } from '@/lang/clang/diagnostics';
 import { createClangRuntime } from '@/lang/clang/runtime';
+import {
+  TOOLCHAIN_CACHE_VERSION,
+  createCachedFiles,
+  openToolchainStorage,
+} from '@/lang/clang/toolchainCache';
 import type { ClangRequest, ClangResponse } from '@/worker/clangProtocol';
 
 /**
@@ -33,20 +38,37 @@ function post(response: ClangResponse): void {
   (self as unknown as { postMessage(message: ClangResponse): void }).postMessage(response);
 }
 
-function toolchainFiles(base: string) {
-  const url = (name: string): string => new URL(name, base).href;
-  return {
-    readBytes: async (name: string): Promise<Uint8Array> => {
-      const response = await fetch(url(name));
-      if (!response.ok) throw new Error(`cannot fetch ${name} (HTTP ${response.status})`);
-      return new Uint8Array(await response.arrayBuffer());
+function networkBytes(base: string, name: string): Promise<Uint8Array> {
+  const url = new URL(name, base).href;
+  return (async () => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`cannot fetch ${name} (HTTP ${response.status})`);
+    return new Uint8Array(await response.arrayBuffer());
+  })();
+}
+
+/** Files read from the machine's IndexedDB cache, and files downloaded now. */
+let fromCache = 0;
+let fromNetwork = 0;
+let reportedToolchain = false;
+
+/**
+ * The toolchain, read through the IndexedDB cache: 58 MB downloaded once, then
+ * served from this machine on every later page load (see toolchainCache.ts).
+ */
+async function toolchainFiles(base: string) {
+  const storage = await openToolchainStorage();
+  return createCachedFiles({
+    storage,
+    version: TOOLCHAIN_CACHE_VERSION,
+    onNote: () => {
+      fromCache += 1;
     },
-    readText: async (name: string): Promise<string> => {
-      const response = await fetch(url(name));
-      if (!response.ok) throw new Error(`cannot fetch ${name} (HTTP ${response.status})`);
-      return response.text();
+    fetchBytes: async (name) => {
+      fromNetwork += 1;
+      return networkBytes(base, name);
     },
-  };
+  });
 }
 
 let cachedRuntime: RuntimeLike | null = null;
@@ -72,11 +94,12 @@ async function handleRun(request: ClangRequest): Promise<void> {
         kind: 'status',
         requestId,
         message:
-          'Đang tải toolchain clang + lld (~58 MB, chỉ lần đầu; sau đó browser cache lại)…',
+          'Đang nạp toolchain clang + lld (~58 MB ở lần tải đầu tiên; các lần sau lấy từ IndexedDB trong máy)…',
       });
 
       cachedRuntime = createClangRuntime({
-        files: toolchainFiles(request.toolchainBase),
+        // Resolved here because it has to be awaited before the runtime reads files.
+        files: await toolchainFiles(request.toolchainBase),
         onOutput: (text, phase) => {
           const clean = stripAnsi(text);
           if (clean.length > 0) {
@@ -94,6 +117,18 @@ async function handleRun(request: ClangRequest): Promise<void> {
     });
 
     const diagnostics = parseClangDiagnostics(outcome.output, request.fileName);
+
+    // Tell the user once per worker whether the toolchain came off the machine or
+    // off the network - this is the difference between a reload costing nothing and
+    // costing 58 MB.
+    if (!reportedToolchain) {
+      reportedToolchain = true;
+      post({
+        kind: 'status',
+        requestId,
+        message: `Toolchain: ${fromCache} file từ IndexedDB trong máy, ${fromNetwork} tải mới`,
+      });
+    }
 
     // `load` means the toolchain itself is missing, which is not the user's code
     // failing: it is reported as `unsupported` so the caller can fall back to the

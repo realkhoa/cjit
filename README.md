@@ -84,6 +84,17 @@ Toolchain (`~58 MB`) **không commit vào git**: `npm run toolchain` tải `clan
 file license). CI tải trước khi build nên site tự phục vụ toolchain từ origin của chính nó — Run không phụ thuộc
 CDN bên thứ ba.
 
+**Toolchain được cache trong IndexedDB, không phải HTTP cache.** GitHub Pages trả `Cache-Control: max-age=600`
+cho các file này, nên reload sau 10 phút là phải revalidate, và entry 31 MB có thể bị browser evict bất cứ lúc
+nào → mỗi lần reload trang là một lần tải lại 58 MB. Thay vào đó, lần chạy đầu tiên ghi toolchain vào
+**IndexedDB** (`cjit-toolchain`) và mọi lần load sau đọc từ đó: **0 network request** (có test assert đúng điều
+này qua IndexedDB thật), không TTL, không revalidate, và Run vẫn chạy được khi mạng chậm/mất mạng. Kèm theo:
+
+- **Version key** (`TOOLCHAIN_CACHE_VERSION`) — đổi toolchain thì cache cũ bị xoá hẳn, không trộn file cũ/mới.
+- **Xin persistent storage** (`navigator.storage.persist()`, best-effort) để 58 MB không bị evict khi hết đĩa.
+- **Suy giảm mềm**: IndexedDB bị chặn/quota/hết chỗ (private mode) thì tự động quay về tải qua mạng, không lỗi.
+- Console nói rõ mỗi lần: `Toolchain: N file từ IndexedDB trong máy, M tải mới`.
+
 Hai điều đáng ghi lại vì đã tốn công tìm:
 
 - `sysroot.tar` **có sẵn libc++**: 195 header trong `include/c++/v1/` (`vector`, `string`, `iostream`…) cùng
