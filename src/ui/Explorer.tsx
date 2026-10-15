@@ -15,11 +15,16 @@ export function Explorer() {
   const createFile = useAppStore((state) => state.createFile);
   const renameActiveFile = useAppStore((state) => state.renameActiveFile);
   const deleteActiveFile = useAppStore((state) => state.deleteActiveFile);
+  const trash = useAppStore((state) => state.trash);
+  const restoreTrashed = useAppStore((state) => state.restoreTrashed);
+  const emptyTrash = useAppStore((state) => state.emptyTrash);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [confirmEmpty, setConfirmEmpty] = useState(false);
 
   const beginRename = (id: string, currentPath: string): void => {
     openFile(id);
@@ -155,6 +160,82 @@ export function Explorer() {
             );
           })}
         </ul>
+
+        {/*
+          Trash: deleting and Reset put files here instead of destroying them, so
+          "nothing is ever wiped" is true rather than a promise. Emptying it is the
+          only action that really deletes, and it asks first.
+        */}
+        <div className="explorer__trash">
+          <button
+            type="button"
+            className="explorer__trash-head"
+            onClick={() => setTrashOpen((open) => !open)}
+            aria-expanded={trashOpen}
+            disabled={trash.length === 0}
+            title={
+              trash.length === 0
+                ? 'Trash trống'
+                : `${trash.length} file đã xoá — mở để lấy lại`
+            }
+          >
+            <span>{trashOpen ? '▾' : '▸'} Trash</span>
+            {trash.length > 0 ? <span className="watch__count">{trash.length}</span> : null}
+          </button>
+
+          {trashOpen && trash.length > 0 ? (
+            <ul className="explorer__list">
+              {trash.map((entry) => (
+                <li key={entry.id} className="explorer__row">
+                  <span className="explorer__name explorer__name--trashed" title={entry.path}>
+                    {entry.path}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => restoreTrashed(entry.id)}
+                    title={`Lấy lại ${entry.path}`}
+                  >
+                    Restore
+                  </button>
+                </li>
+              ))}
+              <li className="explorer__row">
+                {confirmEmpty ? (
+                  <span className="explorer__confirm">
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      onClick={() => {
+                        emptyTrash();
+                        setConfirmEmpty(false);
+                        setTrashOpen(false);
+                      }}
+                    >
+                      Xoá hẳn {trash.length} file
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      onClick={() => setConfirmEmpty(false)}
+                    >
+                      Huỷ
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => setConfirmEmpty(true)}
+                    title="Xoá vĩnh viễn mọi thứ trong Trash"
+                  >
+                    Empty trash…
+                  </button>
+                )}
+              </li>
+            </ul>
+          ) : null}
+        </div>
       </div>
 
       <div className="watch__footer">

@@ -7,6 +7,8 @@ export function StatusBar() {
   const watch = useAppStore((state) => state.watch);
   const cursor = useAppStore((state) => state.cursor);
   const language = useAppStore((state) => state.language);
+  const storageWarning = useAppStore((state) => state.storageWarning);
+  const trash = useAppStore((state) => state.trash);
 
   const tone = overallTone(runState, analysisState, watch.status);
 
@@ -15,9 +17,22 @@ export function StatusBar() {
       <div className="statusbar__left">
         <span className={dotClass(tone)} aria-hidden="true" />
         <span>{overallLabel(runState, analysisState)}</span>
-        <span className="statusbar__detail" title={watch.detail}>
-          {watch.detail}
-        </span>
+        {storageWarning ? (
+          // Loud on purpose: the app works fine while failing to save, which is
+          // exactly how work gets lost.
+          <span className="statusbar__warning" role="status" title={storageWarning}>
+            ⚠ {storageWarning}
+          </span>
+        ) : (
+          <span className="statusbar__detail" title={watch.detail}>
+            {watch.detail}
+          </span>
+        )}
+        {trash.length > 0 ? (
+          <span className="statusbar__item statusbar__item--wide" title="File đã xoá, lấy lại được ở Explorer">
+            trash: {trash.length}
+          </span>
+        ) : null}
       </div>
 
       <div className="statusbar__right">

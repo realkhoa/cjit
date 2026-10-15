@@ -20,6 +20,114 @@ export interface FilesWorkspace {
   readonly activeId: string;
 }
 
+/**
+ * A file that was removed, kept so removing it can be undone.
+ *
+ * Deleting and resetting are the only operations that can destroy work, so both
+ * put what they remove here instead: nothing leaves the browser until the user
+ * empties the trash on purpose.
+ */
+export interface TrashedFile extends StoredFile {
+  readonly deletedAt: number;
+}
+
+/** Bounded so a session of deleting cannot fill the storage quota. */
+export const MAX_TRASHED_FILES = 20;
+
+/** Newest first, capped. */
+export function pushTrashed(
+  trash: readonly TrashedFile[],
+  entries: readonly TrashedFile[],
+): TrashedFile[] {
+  return [...entries].reverse().concat(trash).slice(0, MAX_TRASHED_FILES);
+}
+
+/** Moves a file out of the workspace and into the trash. */
+export function trashFile(
+  files: readonly StoredFile[],
+  trash: readonly TrashedFile[],
+  id: string,
+  now: number,
+): { readonly files: readonly StoredFile[]; readonly trash: readonly TrashedFile[] } {
+  const file = findFile(files, id);
+  if (!file) return { files, trash };
+
+  return {
+    files: files.filter((candidate) => candidate.id !== id),
+    trash: pushTrashed(trash, [{ ...file, deletedAt: now }]),
+  };
+}
+
+/** Puts everything back (used by Reset, so a reset can be undone too). */
+export function trashAll(
+  files: readonly StoredFile[],
+  trash: readonly TrashedFile[],
+  now: number,
+): TrashedFile[] {
+  // Original order, unlike a single delete: these were all removed at once, so the
+  // list reads the way the workspace did.
+  const entries = files.map((file) => ({ ...file, deletedAt: now }));
+  return [...entries, ...trash].slice(0, MAX_TRASHED_FILES);
+}
+
+export interface RestoreResult {
+  readonly files: readonly StoredFile[];
+  readonly trash: readonly TrashedFile[];
+  readonly restored?: StoredFile;
+}
+
+/**
+ * Brings a trashed file back under a free name.
+ *
+ * The restored file gets a new id and, if its old name is taken, a numbered one -
+ * restoring must never overwrite whatever took its place.
+ */
+export function restoreTrashed(
+  files: readonly StoredFile[],
+  trash: readonly TrashedFile[],
+  id: string,
+  now: number,
+): RestoreResult {
+  const entry = trash.find((candidate) => candidate.id === id);
+  if (!entry) return { files, trash };
+
+  const path = uniquePath(files, entry.path);
+  const restored: StoredFile = {
+    id: `${entry.id}-restored-${now.toString(36)}`,
+    path,
+    language: languageForPath(path),
+    code: entry.code,
+    updatedAt: now,
+  };
+
+  return {
+    files: [...files, restored],
+    trash: trash.filter((candidate) => candidate.id !== id),
+    restored,
+  };
+}
+
+export function validTrash(value: unknown): readonly TrashedFile[] {
+  if (!Array.isArray(value)) return [];
+  const entries: TrashedFile[] = [];
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) continue;
+    const candidate = item as Partial<TrashedFile>;
+    if (typeof candidate.id !== 'string' || typeof candidate.path !== 'string') continue;
+    if (typeof candidate.code !== 'string') continue;
+    entries.push({
+      id: candidate.id,
+      path: candidate.path,
+      language: candidate.language === 'c' ? 'c' : 'cpp',
+      code: candidate.code,
+      updatedAt: typeof candidate.updatedAt === 'number' ? candidate.updatedAt : 0,
+      deletedAt: typeof candidate.deletedAt === 'number' ? candidate.deletedAt : 0,
+    });
+    if (entries.length >= MAX_TRASHED_FILES) break;
+  }
+  return entries;
+}
+
 /** Extensions the editor understands, mapped to the language Monaco uses. */
 const LANGUAGE_BY_EXTENSION: ReadonlyMap<string, FileLanguage> = new Map([
   ['c', 'c'],

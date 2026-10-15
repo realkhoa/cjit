@@ -9,17 +9,22 @@ import {
   createFile as createStoredFile,
   findFile,
   initialWorkspace,
-  removeFile,
+  languageForPath,
   renameFile,
+  restoreTrashed as restoreTrashedFile,
+  trashAll,
+  trashFile,
+  uniquePath,
   updateFileCode,
 } from '@/state/fileStore';
-import type { FileLanguage, FilesWorkspace, StoredFile } from '@/state/fileStore';
+import type { FileLanguage, FilesWorkspace, StoredFile, TrashedFile } from '@/state/fileStore';
 import {
   clearFilesWorkspace,
   loadFilesWorkspace,
   loadWorkspace,
   scheduleFilesSave,
   scheduleWorkspaceSave,
+  setPersistFailureHandler,
 } from '@/state/persistence';
 import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
 import type { EditorSettings } from '@/state/settings';
@@ -124,6 +129,13 @@ export interface AppState {
    */
   readonly mobilePane: PaneId;
   /**
+   * Files that were deleted or cleared by Reset, kept until the user empties the
+   * trash. Nothing is destroyed by accident.
+   */
+  readonly trash: readonly TrashedFile[];
+  /** Set when the browser refuses to save, so the user is warned before losing work. */
+  readonly storageWarning: string | null;
+  /**
    * Which moment the Watch pane is showing. It lives here rather than inside the
    * pane because the editor highlights the line that moment came from, so both
    * have to agree on it.
@@ -146,11 +158,18 @@ export interface AppState {
   setTimelinePlaying(playing: boolean): void;
   toggleTimelinePlayback(): void;
   setCodeFromEditor(code: string): void;
-  loadExample(path: string, language: FileLanguage, code: string): void;
+  /**
+   * Opens a sample as a new file. Deliberately not "load into the current file":
+   * replacing the open buffer is how a toolbar click used to wipe someone's work.
+   */
+  openExample(path: string, language: FileLanguage, code: string): void;
   createFile(): void;
   openFile(id: string): void;
   renameActiveFile(path: string): RenameOutcome;
   deleteActiveFile(): void;
+  /** Brings a trashed file back under a free name. */
+  restoreTrashed(id: string): void;
+  emptyTrash(): void;
   resetWorkspace(): void;
   shareLink(): Promise<{ ok: boolean; url?: string; error?: string }>;
   /** Loads a workspace out of the URL fragment; true when one was found. */
@@ -189,13 +208,16 @@ function nextFileId(): string {
 }
 
 /** The workspace to start from: what the browser stored, or a fresh one. */
-function initialFiles(): FilesWorkspace {
+function initialFiles(): FilesWorkspace & { readonly trash: readonly TrashedFile[] } {
   const stored = loadFilesWorkspace();
-  if (stored) return stored;
-  return initialWorkspace('file-1', Date.now(), {
-    path: DEFAULT_EXAMPLE.path,
-    code: DEFAULT_EXAMPLE.code,
-  });
+  if (stored) return { ...stored, trash: stored.trash ?? [] };
+  return {
+    ...initialWorkspace('file-1', Date.now(), {
+      path: DEFAULT_EXAMPLE.path,
+      code: DEFAULT_EXAMPLE.code,
+    }),
+    trash: [],
+  };
 }
 
 function derived(
@@ -252,6 +274,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   cursor: { line: 1, column: 1, selected: 0 },
   settings: settingsFrom(persisted),
   mobilePane: 'code',
+  trash: startFiles.trash,
+  storageWarning: null,
   watchMode: 'cursor',
   timelineIndex: 0,
   timelinePlaying: false,
@@ -263,22 +287,36 @@ export const useAppStore = create<AppState>()((set, get) => ({
     analyzer.schedule(code);
   },
 
-  loadExample(path, language, code) {
-    const { files, activeFileId } = get();
-    const updated = files.map((file) =>
-      file.id === activeFileId
-        ? { ...file, path, language, code, updatedAt: Date.now() }
-        : file,
-    );
+  openExample(path, language, code) {
+    /*
+     * Opens the example as a NEW file, never by writing over the one that is open.
+     *
+     * The old version replaced the active file's path and contents, so picking an
+     * example from the toolbar silently destroyed whatever the user had written -
+     * no confirmation, no undo. Opening a file cannot lose work, whether or not
+     * the example is ever offered in the UI again.
+     */
+    const { files } = get();
+    const created = createStoredFile(files, {
+      id: nextFileId(),
+      now: Date.now(),
+      path,
+      code,
+    });
+    const opened =
+      created.language === language ? created : { ...created, language, path: created.path };
+    const next = [...files, opened];
+
     set((state) => ({
-      files: updated,
-      ...derived(updated, activeFileId),
+      files: next,
+      activeFileId: opened.id,
+      ...derived(next, opened.id),
       codeRevision: state.codeRevision + 1,
-      output: [line('system', `> Opened ${path} into ${code.split('\n').length} lines`)],
+      output: [line('system', `> Opened ${opened.path} as a new file`)],
       consoleTab: 'output',
-      watch: emptyWatch({ detail: `Đang chờ phân tích ${path}…` }),
+      watch: emptyWatch({ detail: `Đang chờ phân tích ${opened.path}…` }),
     }));
-    analyzer.schedule(code);
+    analyzer.schedule(opened.code);
   },
 
   createFile() {
@@ -322,35 +360,70 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   deleteActiveFile() {
-    const { files, activeFileId } = get();
+    const { files, activeFileId, trash } = get();
     // The last file is never removed: an empty workspace has nothing to type in.
     if (files.length <= 1) return;
 
-    const remaining = removeFile(files, activeFileId);
-    const nextActive = remaining[0]?.id ?? '';
+    // Into the trash, not into oblivion: deleting is undoable from the Explorer.
+    const moved = trashFile(files, trash, activeFileId, Date.now());
+    const nextActive = moved.files[0]?.id ?? '';
+
     set((state) => ({
-      files: remaining,
+      files: moved.files,
+      trash: moved.trash,
       activeFileId: nextActive,
-      ...derived(remaining, nextActive),
+      ...derived(moved.files, nextActive),
       codeRevision: state.codeRevision + 1,
+      output: [
+        line('system', '> Đã chuyển file vào Trash (mở Explorer để lấy lại nếu cần)'),
+      ],
     }));
     analyzer.schedule(get().code);
   },
 
+  restoreTrashed(id) {
+    const { files, trash } = get();
+    const result = restoreTrashedFile(files, trash, id, Date.now());
+    const restored = result.restored;
+    if (!restored) return;
+
+    set((state) => ({
+      files: result.files,
+      trash: result.trash,
+      activeFileId: restored.id,
+      ...derived(result.files, restored.id),
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', `> Đã lấy lại ${restored.path} từ Trash`)],
+    }));
+    analyzer.schedule(get().code);
+  },
+
+  emptyTrash() {
+    // The only action that really destroys anything, and it says so first.
+    set({ trash: [] });
+  },
+
   resetWorkspace() {
-    // Forget what the browser stored as well, or a reload would bring it back.
+    const { files, trash } = get();
+
+    // Forget what the browser stored, or a reload would bring it back - but keep
+    // the files themselves in the trash, so Reset is undoable too.
     clearFilesWorkspace();
 
+    const kept = trashAll(files, trash, Date.now());
     const fresh = initialWorkspace(nextFileId(), Date.now(), {
       path: DEFAULT_EXAMPLE.path,
       code: DEFAULT_EXAMPLE.code,
     });
     set((state) => ({
       files: fresh.files,
+      trash: kept,
       activeFileId: fresh.activeId,
       ...derived(fresh.files, fresh.activeId),
       codeRevision: state.codeRevision + 1,
-      output: [line('system', '> Workspace reset to the default example')],
+      output: [
+        line('system', `> Workspace reset — ${files.length} file cũ vẫn nằm trong Trash (Explorer)`),
+      ],
       consoleTab: 'output',
     }));
     analyzer.schedule(get().code);
@@ -407,17 +480,38 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return false;
     }
 
-    const workspace = workspaceFromShare(
+    const shared = workspaceFromShare(
       payload,
       (index) => `shared-${Date.now().toString(36)}-${index}`,
       Date.now(),
     );
+
+    /*
+     * Added to the workspace, not swapped in for it.
+     *
+     * Opening a link should not be a way to lose the files already here: the shared
+     * ones arrive as further files (names that clash get a free one) and the first
+     * of them is opened. Deleting the old files stays a deliberate act.
+     */
+    const existing = get().files;
+    const incoming = shared.files.map((file) => {
+      const path = uniquePath([...existing, ...[]], file.path);
+      return { ...file, path, language: languageForPath(path) };
+    });
+    const merged = [...existing, ...incoming];
+    const opened = merged.find((file) => file.id === incoming[0]?.id) ?? merged[0];
+
     set((state) => ({
-      files: workspace.files,
-      activeFileId: workspace.activeId,
-      ...derived(workspace.files, workspace.activeId),
+      files: merged,
+      activeFileId: opened?.id ?? state.activeFileId,
+      ...derived(merged, opened?.id ?? state.activeFileId),
       codeRevision: state.codeRevision + 1,
-      output: [line('system', `> Đã nạp ${workspace.files.length} file từ link chia sẻ`)],
+      output: [
+        line(
+          'system',
+          `> Đã thêm ${incoming.length} file từ link chia sẻ (giữ nguyên ${existing.length} file đang có)`,
+        ),
+      ],
       consoleTab: 'output',
     }));
     analyzer.schedule(get().code);
@@ -702,6 +796,18 @@ const analyzer = new DebouncedAnalyzer({
   },
 });
 
+/*
+ * A browser that refuses to save is the one failure the user cannot see for
+ * themselves: the app keeps working, so they keep typing, and everything is gone
+ * on the next reload. Surface it instead.
+ */
+setPersistFailureHandler((message) => {
+  useAppStore.setState({ storageWarning: message });
+  if (message) {
+    useAppStore.getState().appendOutput('stderr', `> ${message}`);
+  }
+});
+
 /** Forces the pending analysis to run now (used before a run, and in tests). */
 export function flushAnalysis(): Promise<void> {
   return analyzer.flush();
@@ -725,9 +831,15 @@ export function cancelAnalysis(): void {
 useAppStore.subscribe((state, previous) => {
   if (
     state.files !== previous.files ||
-    state.activeFileId !== previous.activeFileId
+    state.activeFileId !== previous.activeFileId ||
+    state.trash !== previous.trash
   ) {
-    scheduleFilesSave({ version: 2, files: state.files, activeId: state.activeFileId });
+    scheduleFilesSave({
+      version: 2,
+      files: state.files,
+      activeId: state.activeFileId,
+      trash: state.trash,
+    });
   }
 
   if (

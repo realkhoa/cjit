@@ -5,8 +5,8 @@
  * are deliberately not persisted: they are regenerated and can be large.
  */
 
-import { languageForPath } from '@/state/fileStore';
-import type { StoredFile } from '@/state/fileStore';
+import { languageForPath, validTrash } from '@/state/fileStore';
+import type { StoredFile, TrashedFile } from '@/state/fileStore';
 
 const STORAGE_KEY = 'cjit.workspace.v1';
 const FILES_KEY = 'cjit.files.v2';
@@ -29,6 +29,8 @@ export interface PersistedFiles {
   readonly version: 2;
   readonly files: readonly StoredFile[];
   readonly activeId: string;
+  /** Removed files, kept so deleting or resetting can be undone. */
+  readonly trash?: readonly TrashedFile[];
 }
 
 /** Narrow slice of the Storage API, so the load path is testable. */
@@ -118,7 +120,7 @@ export function loadFilesWorkspace(store: StorageLike | null = storage()): Persi
         typeof candidate.activeId === 'string' && files.some((file) => file.id === candidate.activeId)
           ? candidate.activeId
           : (files[0]?.id ?? '');
-      return { version: 2, files, activeId };
+      return { version: 2, files, activeId, trash: validTrash(candidate.trash) };
     }
 
     const legacy = store.getItem(STORAGE_KEY);
@@ -167,14 +169,51 @@ export function scheduleFilesSave(workspace: PersistedFiles): void {
   }, SAVE_DEBOUNCE_MS);
 }
 
+/**
+ * Told once when saving starts failing, and once when it recovers.
+ *
+ * A full storage quota used to be silent, which is the worst possible behaviour:
+ * the app keeps working, so the user keeps typing, and everything is gone on the
+ * next reload. The caller turns this into a visible warning.
+ */
+export type PersistFailureHandler = (message: string | null) => void;
+
+let onPersistFailure: PersistFailureHandler | null = null;
+let failing = false;
+
+export function setPersistFailureHandler(handler: PersistFailureHandler | null): void {
+  onPersistFailure = handler;
+}
+
+function reportPersist(ok: boolean, message: string): void {
+  if (ok) {
+    if (failing) {
+      failing = false;
+      onPersistFailure?.(null);
+    }
+    return;
+  }
+  if (failing) return;
+  failing = true;
+  onPersistFailure?.(message);
+}
+
 export function writeFilesNow(workspace: PersistedFiles): boolean {
   const store = storage();
-  if (!store) return false;
+  if (!store) {
+    reportPersist(false, 'trình duyệt không cho lưu (chế độ riêng tư?) — file chỉ nằm trong tab này');
+    return false;
+  }
+
   try {
     store.setItem(FILES_KEY, JSON.stringify(workspace));
+    reportPersist(true, '');
     return true;
   } catch {
-    // Quota exceeded: stop pretending it was saved.
+    reportPersist(
+      false,
+      'không lưu được workspace (hết dung lượng?) — dùng Share link hoặc tải file về để giữ lại',
+    );
     return false;
   }
 }

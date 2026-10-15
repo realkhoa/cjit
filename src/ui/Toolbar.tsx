@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { ENGINE_ORDER, getEngine } from '@/engine/registry';
 import type { EngineId } from '@/engine/types';
-import { EXAMPLES } from '@/examples/sample';
 import { isTranslationUnit } from '@/lang/clang/runtime';
 import { useAppStore } from '@/state/store';
 import { SettingsDialog } from '@/ui/SettingsDialog';
@@ -14,7 +13,6 @@ export function Toolbar() {
   const artifactsReady = useAppStore((state) => state.artifactsReady);
   const downloadArtifact = useAppStore((state) => state.downloadArtifact);
   const clearOutput = useAppStore((state) => state.clearOutput);
-  const loadExample = useAppStore((state) => state.loadExample);
   const setEngineId = useAppStore((state) => state.setEngineId);
   const inlineValues = useAppStore((state) => state.settings.inlineValues);
   const debounceMs = useAppStore((state) => state.settings.debounceMs);
@@ -103,31 +101,9 @@ export function Toolbar() {
       <div className="toolbar__sep" />
 
       <div className="toolbar__group">
-        <label className="toolbar__label" htmlFor="example-select">
-          Example
-        </label>
-        <select
-          id="example-select"
-          className="select"
-          value={path}
-          onChange={(event) => {
-            const chosen = EXAMPLES.find((example) => example.path === event.target.value);
-            if (chosen) loadExample(chosen.path, chosen.language, chosen.code);
-          }}
-        >
-          {EXAMPLES.map((example) => (
-            <option key={example.path} value={example.path}>
-              {example.path}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="toolbar__sep" />
-
-      <button type="button" className="btn" onClick={clearOutput} title="Xoá nội dung console">
-        Clear console
-      </button>
+        <button type="button" className="btn" onClick={clearOutput} title="Xoá nội dung console">
+          Clear console
+        </button>
 
       <button
         type="button"
@@ -159,6 +135,7 @@ export function Toolbar() {
       </button>
 
       {settingsOpen ? <SettingsDialog onClose={() => setSettingsOpen(false)} /> : null}
+      </div>
 
       <div className="titlebar__spacer" />
 
