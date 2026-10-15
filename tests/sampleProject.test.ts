@@ -44,17 +44,11 @@ describe('the bundled C++ tour', () => {
     expect(run.stdout).toContain('lifo top = 2');
     expect(run.stdout).toContain('largest = 9');
     expect(run.stdout).toContain('deque front = 1, back = 3');
+    // A template function returning T, instantiated for int and for double. This
+    // printed 4.4e-323 (the int 9 read as a double) before the slot-width fix.
+    expect(run.stdout).toContain('bigger(3, 9) = 9');
+    expect(run.stdout).toContain('bigger(2.5, 1.5) = 2.5');
   });
-
-  /*
-   * Known limitation, found by writing this sample. A template function that
-   * *returns* T does not work yet: `template <typename T> T bigger(T, T)` called as
-   * bigger(3, 9) printed 4.4e-323 - the int 9 reinterpreted as a double, because
-   * the return type resolved to double while the value was stored as an int. The
-   * sample therefore uses a template returning void (printAll), and this is the
-   * first thing to fix.
-   */
-  it.todo('a template function returning T: bigger(3, 9) printed 4.4e-323 instead of 9');
 
   it('shows the containers in the watch snapshot, not just their printed form', () => {
     const files = new Map(EXAMPLES.map((file) => [file.path, file.code]));

@@ -92,8 +92,9 @@ int main() {
     std::cout << "atoi(" << std::stoi("42abc") << "), pi = " << std::stod("3.5") << '\\n';
     std::cout << "substr = " << line.substr(0, 5) << ", find = " << line.find("and") << '\\n';
 
-    // --- the template from util.h ran twice above: printAll(sorted) and
-    // printAll(counter), both instantiated for int.
+    // --- the template from util.h, instantiated for int and for double
+    std::cout << "bigger(3, 9) = " << bigger(3, 9) << '\\n';
+    std::cout << "bigger(2.5, 1.5) = " << bigger(2.5, 1.5) << '\\n';
 
     return 0;
 }
@@ -124,10 +125,13 @@ void printAll(const std::vector<T>& values) {
     std::cout << "]\\n";
 }
 
-/*
- * Note for the next fix: a template function *returning* T does not work yet.
- * A template returning void, like this one, is fine.
- */
+// Instantiated twice below, for int and for double: the engine keeps the two
+// instantiations apart by the type of the value written through the template
+// parameter.
+template <typename T>
+T bigger(T left, T right) {
+    return left > right ? left : right;
+}
 `;
 
 export const SAMPLE_HELLO_C = `#include <stdio.h>

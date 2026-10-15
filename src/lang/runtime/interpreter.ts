@@ -410,6 +410,13 @@ class Interpreter {
   private readonly allocations = new Map<number, number>();
   /** Allocations the program itself asked for (`malloc`, `new`, and their friends). */
   private readonly userAllocations = new Map<number, number>();
+  /**
+   * The type actually stored in a slot whose declared type is a template parameter.
+   *
+   * `T` has no width until something is written through it, and reading eight bytes
+   * out of a four-byte write is how a template's `int` return came back as a double.
+   */
+  private readonly slotTypes = new Map<number, CType>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -1937,6 +1944,9 @@ class Interpreter {
     if (address === 0) return;
     this.memory.free(address);
     this.allocations.delete(address);
+    // The slot is gone, so what was written through it must not describe whatever
+    // is allocated there next.
+    this.slotTypes.delete(address);
   }
 
   private callBuiltin(name: string, args: readonly Expression[], position: SourcePos): Value {
@@ -3313,10 +3323,20 @@ class Interpreter {
         }
         return;
       default:
-        // An unknown/template type is stored by the actual value kind, so a
-        // double does not get truncated to an integer on the way in.
-        if (value.kind === 'float') this.memory.writeFloat64(address, toNumber(value));
-        else this.memory.writeInt64(address, Math.trunc(toNumber(value)));
+        /*
+         * An unknown/template type is stored by the actual value kind, so a double
+         * does not get truncated to an integer on the way in - and the kind is
+         * remembered, because reading such a slot without knowing what went into it
+         * is what turned a template function's `int` return into a double read from
+         * eight bytes: bigger(3, 9) printed 4.4e-323.
+         */
+        if (value.kind === 'float') {
+          this.slotTypes.set(address, value.type);
+          this.memory.writeFloat64(address, toNumber(value));
+        } else {
+          this.slotTypes.set(address, value.type);
+          this.memory.writeInt64(address, Math.trunc(toNumber(value)));
+        }
         return;
     }
   }
@@ -3360,11 +3380,20 @@ class Interpreter {
       case 'struct':
       case 'union':
         return { kind: 'aggregate', type, address };
-      default:
-        // Unknown/template type: zero reads as 0 whichever width it later takes.
-        return this.memory.readFloat64(address) === 0
-          ? intValue(longType(), 0)
-          : floatValue(doubleType(), this.memory.readFloat64(address));
+      default: {
+        /*
+         * A template type has no width of its own, so the width of the value that
+         * was stored decides. Without this, an `int` written into a `T` slot was read
+         * back as a float64 - eight bytes of which four were zero - and
+         * `template <typename T> T bigger(T, T)` printed 4.4e-323 for bigger(3, 9).
+         */
+        const stored = this.slotTypes.get(address);
+        if (stored) return this.load(stored, address);
+
+        // Nothing has been written there yet: zero reads as 0 whichever width it
+        // later takes.
+        return intValue(longType(), 0);
+      }
     }
   }
 
