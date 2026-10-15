@@ -11,13 +11,12 @@ export interface MobileHeaderProps {
 }
 
 /**
- * Compact top bar for mobile viewports.
- *
- * Displays the current file name, an engine switch pill, a prominent Run/Stop
+ * @brief Compact top bar for mobile viewports.
+ * @details Displays the current file name, an engine switch pill, a prominent Run/Stop
  * touch button, and an overflow menu button.
  *
  * @param props Component properties containing the menu toggle handler.
- * @returns Mobile header JSX element.
+ * @return Mobile header JSX element.
  */
 export function MobileHeader({ onOpenMenu }: MobileHeaderProps) {
   const path = useAppStore((state) => state.path);
@@ -31,6 +30,9 @@ export function MobileHeader({ onOpenMenu }: MobileHeaderProps) {
   const fileName = path.includes('/') ? path.slice(path.lastIndexOf('/') + 1) : path;
   const engine = getEngine(engineId);
 
+  /**
+   * @brief Toggles between 'fast' and 'clang-wasm' compiler engines.
+   */
   const toggleEngine = () => {
     const nextEngine: EngineId = engineId === 'fast' ? 'clang-wasm' : 'fast';
     setEngineId(nextEngine);

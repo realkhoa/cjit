@@ -14,13 +14,12 @@ export interface MobileMenuProps {
 }
 
 /**
- * Bottom-sheet overflow menu for mobile viewports.
- *
- * Groups engine switching, artifact downloads, share link, clear output,
+ * @brief Bottom-sheet overflow menu for mobile viewports.
+ * @details Groups engine switching, artifact downloads, share link, clear output,
  * and application settings into a convenient touch modal.
  *
  * @param props Component properties containing the close callback.
- * @returns Mobile bottom sheet JSX element.
+ * @return Mobile bottom sheet JSX element.
  */
 export function MobileMenu({ onClose }: MobileMenuProps) {
   const engineId = useAppStore((state) => state.engineId);
@@ -34,6 +33,9 @@ export function MobileMenu({ onClose }: MobileMenuProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shareStatus, setShareStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
+  /**
+   * @brief Generates and copies a project share link to the clipboard.
+   */
   const handleShare = () => {
     void shareLink().then((res) => {
       setShareStatus(res.ok ? 'copied' : 'failed');

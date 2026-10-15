@@ -36,15 +36,18 @@ export interface MobileAccessoryBarProps {
 }
 
 /**
- * Horizontal quick-key accessory bar docked under the mobile code editor.
- *
- * Allows single-tap insertion of common C++ symbols that are otherwise
+ * @brief Horizontal quick-key accessory bar docked under the mobile code editor.
+ * @details Allows single-tap insertion of common C++ symbols that are otherwise
  * awkward to reach on standard on-screen smartphone keyboards.
  *
  * @param props Component properties.
- * @returns Accessory bar JSX element.
+ * @return Accessory bar JSX element.
  */
 export function MobileAccessoryBar({ onInsertText }: MobileAccessoryBarProps) {
+  /**
+   * @brief Dispatches the selected quick key text to the active editor.
+   * @param key The quick key descriptor to insert.
+   */
   const handleKeyClick = (key: QuickKey) => {
     if (onInsertText) {
       onInsertText(key.text);

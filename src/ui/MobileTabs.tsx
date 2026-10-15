@@ -2,10 +2,9 @@ import { useAppStore } from '@/state/store';
 import { PANE_LABELS, PANE_ORDER, type PaneId } from '@/ui/responsive';
 
 /**
- * Tab icon component for the mobile navigation bar.
- *
+ * @brief Tab icon component for the mobile navigation bar.
  * @param props Props containing the pane identifier.
- * @returns SVG icon element.
+ * @return SVG icon element.
  */
 function TabIcon({ id }: { readonly id: PaneId }) {
   switch (id) {
@@ -37,12 +36,11 @@ function TabIcon({ id }: { readonly id: PaneId }) {
 }
 
 /**
- * Pane switcher for the narrow mobile layout.
- *
- * Renders touch-optimized bottom tabs with SVG icons, real-time analysis/run
+ * @brief Pane switcher for the narrow mobile layout.
+ * @details Renders touch-optimized bottom tabs with SVG icons, real-time analysis/run
  * status dots, and problem count badges.
  *
- * @returns Mobile tabs JSX navigation bar.
+ * @return Mobile tabs JSX navigation bar.
  */
 export function MobileTabs() {
   const pane = useAppStore((state) => state.mobilePane);
