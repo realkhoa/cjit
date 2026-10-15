@@ -143,13 +143,27 @@ describe('preprocessor: includes', () => {
     expect(find(result, 'fromRoot')).toBeUndefined();
   });
 
-  it('includes a workspace file once, like a built-in header', () => {
-    const files = new Map([['util.h', 'int helper(int value);\n']]);
-    const result = pre('#include "util.h"\n#include "util.h"\nint main(void) { return 0; }', {
-      files,
+  it('includes a header as many times as it is named, unless it says #pragma once', () => {
+    // Real C: a guard-less header included twice is included twice, and the
+    // redefinition is the user's to see. Being lenient here would disagree with
+    // clang, which is the engine that has to agree.
+    const repeated = pre('#include "util.h"\n#include "util.h"\nint main(void) { return 0; }', {
+      files: new Map([['util.h', 'int helper(int value);\n']]),
     });
+    expect(repeated.tokens.filter((token) => token.text === 'helper')).toHaveLength(2);
 
-    expect(result.tokens.filter((token) => token.text === 'helper')).toHaveLength(1);
+    // With `#pragma once` it is spliced once, whichever path reached it.
+    const guarded = pre('#include "util.h"\n#include "util.h"\nint main(void) { return 0; }', {
+      files: new Map([['util.h', '#pragma once\nint helper(int value);\n']]),
+    });
+    expect(guarded.tokens.filter((token) => token.text === 'helper')).toHaveLength(1);
+    expect(errors(guarded)).toEqual([]);
+  });
+
+  it('accepts #pragma once without a word about it', () => {
+    const result = pre('#pragma once\nint main(void) { return 0; }');
+    expect(errors(result)).toEqual([]);
+    expect(warnings(result)).toEqual([]);
   });
 
   it('follows a chain of workspace headers', () => {

@@ -221,11 +221,27 @@ export function createFile(
   };
 }
 
+/**
+ * What a brand-new project file starts with.
+ *
+ * `#pragma once`, as the user asked, and *no* `main`: a project can only have one
+ * entry point, so creating a file used to break the build of every other file in
+ * the project. A new file is a module; give it a `main` when it is a program.
+ */
 export function defaultCodeFor(path: string): string {
   if (languageForPath(path) === 'c') {
-    return `#include <stdio.h>\n\nint main(void) {\n    printf("hello\\n");\n    return 0;\n}\n`;
+    return [
+      '#pragma once',
+      '',
+      '#include <stdio.h>',
+      '',
+      '// TODO: hàm của bạn ở đây',
+      '',
+    ].join('\n');
   }
-  return `#include <iostream>\n\nint main() {\n    std::cout << "hello\\n";\n    return 0;\n}\n`;
+  return ['#pragma once', '', '#include <iostream>', '', '// TODO: hàm của bạn ở đây', ''].join(
+    '\n',
+  );
 }
 
 export interface RenameResult {

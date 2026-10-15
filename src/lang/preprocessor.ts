@@ -263,6 +263,8 @@ class Preprocessor {
   private readonly diagnostics: Diagnostic[] = [];
   private readonly macros = new Map<string, MacroDefinition>();
   private readonly included = new Set<string>();
+  /** Files that asked for `#pragma once`, so they splice at most once. */
+  private readonly onceFiles = new Set<string>();
   private readonly includedOrder: string[] = [];
   private readonly sources = new Map<string, string>();
   private readonly conditionals: ConditionalFrame[] = [];
@@ -449,7 +451,12 @@ class Preprocessor {
         break;
       case 'pragma':
       case 'line':
-        // `#pragma once` is implicit for every built-in header; nothing to do.
+        // `#pragma once` is honoured: the file it appears in is spliced at most
+        // once, whatever path it was reached by. Everything else is ignored, as a
+        // compiler is free to do.
+        if (name === 'pragma' && args[0]?.text === 'once' && hash.file) {
+          this.onceFiles.add(hash.file);
+        }
         break;
       default:
         this.warn(hash, `unknown preprocessor directive #${name}`);
@@ -619,12 +626,20 @@ class Preprocessor {
     }
 
     if (!systemStyle) {
-      // A file in the workspace: resolved the way a compiler resolves it, included
-      // once, with its tokens attributed to its own path so symbols, errors and
-      // go-to-definition all point at the file the user wrote.
+      /*
+       * A file in the workspace, resolved the way a compiler resolves it: relative
+       * to the including file first, then the workspace root, with its tokens
+       * attributed to its own path so symbols, errors and go-to-definition all
+       * point at the file the user wrote.
+       *
+       * Inclusion follows the real rule: a file is included as many times as it is
+       * named, unless it asks for `#pragma once` (which every new project file gets
+       * by default). Being lenient here would hide a missing include guard - and,
+       * worse, would disagree with clang.
+       */
       const local = this.resolveLocalInclude(name, hash.file);
       if (local) {
-        if (this.included.has(local.path)) return;
+        if (this.onceFiles.has(local.path) && this.included.has(local.path)) return;
         this.included.add(local.path);
         this.includedOrder.push(local.path);
         this.spliceWorkspaceFile(local.path, local.source, hash);

@@ -151,7 +151,12 @@ describe('initialWorkspace', () => {
     expect(workspace.files).toHaveLength(1);
     expect(workspace.activeId).toBe('file-1');
     expect(workspace.files[0]?.language).toBe('cpp');
-    expect(defaultCodeFor('main.c')).toContain('printf');
+    // A new project file is a module: `#pragma once`, and no `main` - a second
+    // `main` in the workspace would break the link of the whole project.
+    expect(defaultCodeFor('main.c')).toContain('#pragma once');
+    expect(defaultCodeFor('main.c')).not.toContain('main(');
+    expect(defaultCodeFor('main.cpp')).toContain('#pragma once');
+    expect(defaultCodeFor('main.cpp')).not.toContain('main(');
   });
 });
 

@@ -121,6 +121,12 @@ lúc toolchain chưa nạp xong, Run tự fallback về fast engine và **nói r
 
 ### Workspace nhiều file, lưu trong browser
 
+**File mới trong project là một module**: bắt đầu bằng **`#pragma once`** và **không có `main`** — vì project chỉ
+được có một entry point, nên trước đây tạo file mới là làm hỏng build của cả project (link trùng `main`). Muốn một
+chương trình nữa thì tự thêm `main`. `#pragma once` được fast engine **thực thi đúng ngữ nghĩa**: file có nó thì
+được splice **một lần** dù đi vào bằng đường nào; file không có nó thì được include **mỗi lần được gọi tên** — đúng
+như C, và **khớp với clang** (engine kia phải đồng ý, nếu không thì hai engine dạy hai thói quen khác nhau).
+
 **Các file trong workspace nhìn thấy nhau.** `#include "util.h"` resolve theo đúng cách compiler làm: **thư mục
 của file đang include trước**, rồi tới workspace root (đóng vai include path); include-once, đi theo được chuỗi
 header, và token của file được include mang **đúng path của nó** nên symbol/lỗi/go-to-definition đều trỏ về file

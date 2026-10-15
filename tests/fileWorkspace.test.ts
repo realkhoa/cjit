@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe('file workspace: creating and switching', () => {
-  it('creates a new file, makes it active and gives it a runnable stub', () => {
+  it('creates a new project file, which does not carry its own main', () => {
     useAppStore.getState().createFile();
 
     const state = useAppStore.getState();
@@ -37,7 +37,9 @@ describe('file workspace: creating and switching', () => {
     expect(created?.path).toBe('untitled.c');
     expect(created?.language).toBe('c');
     expect(state.code).toBe(created?.code);
-    expect(state.code).toContain('printf');
+    // Creating a file must not break the build: one main per project.
+    expect(state.code).toContain('#pragma once');
+    expect(state.code).not.toContain('main(');
   });
 
   it('does not reuse a name that is taken', () => {
