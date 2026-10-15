@@ -47,6 +47,22 @@ export interface ParamDecl extends Node {
 export interface MemberDecl extends Node {
   readonly name: string;
   readonly type: TypeRef;
+  /** Who may touch it. `struct` defaults to public, `class` to private. */
+  readonly access?: Access;
+}
+
+export type Access = 'public' | 'private' | 'protected';
+
+/** A member function: `int add(int amount) { ... }` inside the class body. */
+export interface MethodDecl extends Node {
+  readonly name: string;
+  readonly returnType: TypeRef;
+  readonly params: readonly ParamDecl[];
+  readonly body?: CompoundStmt;
+  readonly access?: Access;
+  /** `static` methods have no `this`; kept so the message can say so. */
+  readonly isStatic?: boolean;
+  readonly isConst?: boolean;
 }
 
 export interface EnumeratorDecl extends Node {
@@ -179,6 +195,10 @@ export interface StructDeclNode extends Node {
   /** True when a `{ ... }` body was present in this declaration. */
   readonly isDefinition: boolean;
   readonly members: readonly MemberDecl[];
+  /** `class` rather than `struct`: same layout, different default access. */
+  readonly isClass?: boolean;
+  /** Member functions, which are not part of the layout. */
+  readonly methods?: readonly MethodDecl[];
 }
 
 export interface EnumDeclNode extends Node {

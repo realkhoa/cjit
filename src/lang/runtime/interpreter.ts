@@ -5,6 +5,7 @@ import type {
   Expression,
   FunctionDeclNode,
   Statement,
+  StructDeclNode,
   TranslationUnit,
   VarDecl,
 } from '@/lang/ast';
@@ -14,6 +15,7 @@ import {
   VOID_TYPE,
   alignOf,
   arrayOf,
+  bareTagName,
   containerKindOf,
   elementKindCode,
   elementTypeFromCode,
@@ -26,7 +28,7 @@ import {
   pairParts,
   pointerTo,
 } from '@/lang/ctype';
-import type { CType } from '@/lang/ctype';
+import type { CType, CTypeMember } from '@/lang/ctype';
 import { makeDiagnostic } from '@/lang/diagnostics';
 import { Memory, MemoryError } from '@/lang/memory';
 import {
@@ -457,6 +459,8 @@ class Interpreter {
   private readonly functionSignatures = new Map<string, string>();
   /** Names defined more than once with different parameters: a call must refuse. */
   private readonly overloadedNames = new Set<string>();
+  /** Access of each registered method, keyed by its qualified name. */
+  private readonly methodAccess = new Map<string, 'public' | 'private' | 'protected'>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -711,6 +715,7 @@ class Interpreter {
     for (const declaration of declarations) {
       if (declaration.kind === 'struct' && declaration.isDefinition) {
         this.resolver.registerStruct(declaration.tag, declaration.members, declaration.isUnion);
+        this.registerMethods(declaration);
         continue;
       }
       if (declaration.kind === 'enum' && declaration.isDefinition) {
@@ -1567,6 +1572,10 @@ class Interpreter {
       return this.load(binding.type, binding.address, binding);
     }
 
+    // A bare data member inside a method reads through `this`.
+    const member = this.implicitThisMember(name);
+    if (member) return this.load(member.type, member.address);
+
     const declaration = this.definitions.get(name);
     if (declaration) {
       const index = this.functionTable.indexOf(name);
@@ -1906,6 +1915,131 @@ class Interpreter {
     return this.load(target.type, target.address);
   }
 
+  /**
+   * `counter.add(3)` - a method on a class or struct.
+   *
+   * The object is passed as `this` rather than copied, so a method that changes a
+   * member changes the object it was called on. Access is checked here: a private
+   * method called from outside its class is an error, as a native compiler reports.
+   */
+  private resolveMethodCall(
+    callee: Extract<Expression, { kind: 'member' }>,
+    position: SourcePos,
+  ): { declaration: FunctionDeclNode; thisAddress: number; thisType: CType } | null {
+    let baseAddress: number;
+    let baseType: CType;
+
+    if (callee.arrow) {
+      const pointer = this.decay(this.evaluate(callee.object));
+      const address = toPointerAddress(pointer);
+      if (address === null || address === 0) {
+        throw new RuntimeFault('null pointer dereference', callee.start);
+      }
+      baseAddress = address;
+      baseType = pointer.type.pointee ?? UNKNOWN_TYPE;
+    } else {
+      const aggregate = this.evaluate(callee.object);
+      if (aggregate.kind !== 'aggregate') return null;
+      baseAddress = aggregate.address;
+      baseType = aggregate.type;
+    }
+
+    const tag = bareTagName(baseType.name);
+    if (tag.length === 0) return null;
+
+    const qualified = `${tag}::${callee.property}`;
+    const declaration = this.definitions.get(qualified);
+    if (!declaration) return null;
+
+    const access = this.methodAccess.get(qualified) ?? 'public';
+    if (!this.mayTouch(access, tag)) {
+      throw new RuntimeFault(
+        `'${callee.property}' is ${access} in '${tag}'`,
+        position,
+      );
+    }
+
+    return { declaration, thisAddress: baseAddress, thisType: baseType };
+  }
+
+  /**
+   * Whether the code being run is allowed to touch a member or method of `owner`.
+   *
+   * Inside `Counter::add`, the private members of `Counter` are fair game; anywhere
+   * else they are not. Derived classes are not modelled, so `protected` is treated as
+   * private - the stricter reading, which cannot quietly allow something.
+   */
+  private mayTouch(access: string | undefined, owner: string): boolean {
+    if (access === undefined || access === 'public') return true;
+    const current = this.callStack[this.callStack.length - 1]?.name ?? '';
+    return current.startsWith(`${owner}::`);
+  }
+
+  /**
+   * A member function becomes an ordinary function under its qualified name.
+   *
+   * `Counter::add` is then a definition like any other, which is what lets the call
+   * path, the recursion budget and the watch pane treat it the same way. Its `this`
+   * arrives as an extra argument rather than a parameter, because it is not written in
+   * the parameter list.
+   */
+  private registerMethods(declaration: StructDeclNode): void {
+    const tag = declaration.tag;
+    if (!tag) return;
+
+    for (const method of declaration.methods ?? []) {
+      // Only a definition can be called; `int add(int);` inside the class with the body
+      // outside is not supported yet, and is reported when it is called.
+      if (!method.body) continue;
+
+      const qualified = `${tag}::${method.name}`;
+      this.methodAccess.set(
+        qualified,
+        method.access ?? (declaration.isClass ? 'private' : 'public'),
+      );
+      this.registerFunction({
+        kind: 'function',
+        name: qualified,
+        returnType: method.returnType,
+        params: method.params,
+        variadic: false,
+        storage: [],
+        body: method.body,
+        start: method.start,
+        end: method.end,
+      });
+    }
+  }
+
+  /**
+   * A data member named without `this->` inside a method.
+   *
+   * `void add(int amount) { value = value + amount; }` is the ordinary way to write it,
+   * and the member is only reachable through the object the method was called on.
+   */
+  private implicitThisMember(name: string): { address: number; type: CType } | null {
+    const self = this.lookup('this');
+    if (!self) return null;
+
+    const owner = self.type.pointee;
+    const member = owner?.members?.find((item) => item.name === name);
+    if (!owner || !member) return null;
+
+    this.checkMemberAccess(member, bareTagName(owner.name), name, this.unit.start);
+    return { address: this.memory.readUint64(self.address) + member.offset, type: member.type };
+  }
+
+  /** The same check for a data member, from the layout the value carries. */
+  private checkMemberAccess(
+    member: CTypeMember,
+    owner: string,
+    name: string,
+    position: SourcePos,
+  ): void {
+    if (this.mayTouch(member.access, owner)) return;
+    throw new RuntimeFault(`'${name}' is ${member.access} in '${owner}'`, position);
+  }
+
   private memberTarget(
     expression: Extract<Expression, { kind: 'member' }>,
   ): { address: number; type: CType } | null {
@@ -1931,6 +2065,10 @@ class Interpreter {
 
     const member = baseType.members?.find((item) => item.name === expression.property);
     if (!member) return null;
+
+    // A private member is private outside its own class, exactly as clang has it.
+    this.checkMemberAccess(member, bareTagName(baseType.name), expression.property, expression.start);
+
     return { address: baseAddress + member.offset, type: member.type };
   }
 
@@ -2040,8 +2178,35 @@ class Interpreter {
       // pointer, which the generic path below resolves.
     }
 
+    /*
+     * A method of the same class, called without `this->`: inside `Counter::add`,
+     * `reset()` means `this->reset()`.
+     */
+    if (callee.kind === 'identifier') {
+      const current = this.callStack[this.callStack.length - 1]?.name ?? '';
+      const owner = current.includes('::') ? current.slice(0, current.lastIndexOf('::')) : '';
+      const sameClass = owner.length > 0 ? this.definitions.get(`${owner}::${callee.name}`) : undefined;
+      if (sameClass) {
+        const self = this.lookup('this');
+        const target = self ? this.memory.readUint64(self.address) : undefined;
+        return this.callFunction(
+          sameClass,
+          this.callArguments(expression.args, sameClass),
+          target,
+          self?.type.pointee,
+        );
+      }
+    }
+
     // Container member calls: v.size(), v.push_back(x), s.substr(1, 2)…
     if (callee.kind === 'member') {
+      // A method of a class or struct comes first: `counter.add(3)`.
+      const method = this.resolveMethodCall(callee, expression.start);
+      if (method) {
+        const args = this.callArguments(expression.args, method.declaration);
+        return this.callFunction(method.declaration, args, method.thisAddress, method.thisType);
+      }
+
       const container = this.callContainerMethod(callee, expression.args, expression.start);
       if (container !== undefined) return container;
     }
@@ -2126,7 +2291,12 @@ class Interpreter {
     return this.evaluate(expression);
   }
 
-  private callFunction(declaration: FunctionDeclNode, args: readonly Value[]): Value {
+  private callFunction(
+    declaration: FunctionDeclNode,
+    args: readonly Value[],
+    thisAddress?: number,
+    thisType?: CType,
+  ): Value {
     this.recursionDepth += 1;
     if (this.recursionDepth > this.limits.maxRecursionDepth) {
       throw new BudgetFault(
@@ -2148,6 +2318,24 @@ class Interpreter {
     this.refreshStackSnapshot();
 
     try {
+      /*
+       * `this` is the object the method was called on, passed as an address rather than
+       * a copy so `this->value = 3` changes the caller's object.
+       */
+      if (thisAddress !== undefined && thisType !== undefined) {
+        const type = pointerTo(thisType);
+        const address = this.allocateFor(type);
+        this.memory.writeUint64(address, thisAddress);
+        this.bind({
+          name: 'this',
+          type,
+          address,
+          storage: 'param',
+          scopeName: declaration.name,
+          declaredAt: body.start,
+        });
+      }
+
       declaration.params.forEach((param, index) => {
         if (param.name === undefined) return;
         const type = this.resolver.resolve(param.type);
@@ -3751,7 +3939,12 @@ class Interpreter {
     switch (expression.kind) {
       case 'identifier': {
         const binding = this.lookup(expression.name);
-        if (!binding) return null;
+        if (!binding) {
+          // Inside a method a bare name may be a data member of `this`.
+          const member = this.implicitThisMember(expression.name);
+          if (member) return member;
+          return null;
+        }
 
         /*
          * A reference *is* its referent, so an assignment through one writes to the

@@ -1,5 +1,6 @@
 import type { Diagnostic } from '@/engine/types';
 import type {
+  Access,
   CompoundStmt,
   Declaration,
   EnumeratorDecl,
@@ -7,6 +8,7 @@ import type {
   FunctionDeclNode,
   InitListExpr,
   MemberDecl,
+  MethodDecl,
   ParamDecl,
   Statement,
   StorageClass,
@@ -279,8 +281,35 @@ class Parser {
     // C++ spellings the engine resolves itself: `std::vector<int> v;`, `std::string s;`.
     // An *unqualified* standard name only counts once a `using` has brought it into
     // scope, which is what a native compiler requires too.
+    if (
+      this.templateDeclarationAhead() ||
+      this.qualifiedTypeAhead() ||
+      this.importedTypeAhead()
+    ) {
+      return true;
+    }
+
+    /*
+     * In C++ a struct, class or enum name *is* a type name on its own: `Point p;` needs
+     * no `struct` in front, unlike C. The tag registry already knows these names.
+     */
+    const token = this.peek();
+    if (this.isNameToken(token) && this.isKnownTagName(token.text)) {
+      const next = this.tokenAt(this.index + 1);
+      return (
+        next !== undefined && (this.isNameToken(next) || next.text === '*' || next.text === '&')
+      );
+    }
+
+    return false;
+  }
+
+  /** Whether `Point` names a struct, class or enum declared earlier in this file. */
+  private isKnownTagName(name: string): boolean {
     return (
-      this.templateDeclarationAhead() || this.qualifiedTypeAhead() || this.importedTypeAhead()
+      this.tags.has(`struct ${name}`) ||
+      this.tags.has(`union ${name}`) ||
+      this.tags.has(`enum ${name}`)
     );
   }
 
@@ -453,9 +482,19 @@ class Parser {
         STD_TYPE_NAMES.has(token.text) &&
         (this.usingNamespaceStd || this.usingNames.has(token.text));
 
+      /*
+       * A known tag name is a type on its own (`Point p;`), but only when it is the
+       * *type*. In `typedef struct Point Point;` the second `Point` is the declared
+       * name, which is why a name followed by a declarator terminator is not eaten as a
+       * second type once a concrete type has already been seen.
+       */
+      const knownTag =
+        this.isKnownTagName(token.text) &&
+        !(sawConcreteType && [';', '=', ',', '[', ')'].includes(nextText ?? ''));
+
       if (
         (token.kind === 'identifier' || token.kind === 'keyword') &&
-        (qualifiedOrTemplated || importedStd)
+        (qualifiedOrTemplated || importedStd || knownTag)
       ) {
         let name = token.text;
         this.advance();
@@ -516,7 +555,7 @@ class Parser {
     return { type, storage, consumed, start, elaborated };
   }
 
-  private parseStructSpecifier(isUnion: boolean): Declaration | undefined {
+  private parseStructSpecifier(isUnion: boolean, isClass = false): Declaration | undefined {
     const keyword = this.advance();
     let tag: string | undefined;
     if (this.isNameToken(this.peek())) {
@@ -536,13 +575,26 @@ class Parser {
     }
 
     const members: MemberDecl[] = [];
+    const methods: MethodDecl[] = [];
     let isDefinition = false;
+    /** `class` starts private, `struct` starts public; labels switch it. */
+    let access: Access = isClass ? 'private' : 'public';
 
     if (this.check('{')) {
       isDefinition = true;
       this.advance();
       while (!this.atEnd() && !this.check('}')) {
         const before = this.index;
+
+        // `public:` and friends, which switch who may touch what follows.
+        if (
+          (this.check('public') || this.check('private') || this.check('protected')) &&
+          this.tokenAt(this.index + 1)?.text === ':'
+        ) {
+          access = this.advance().text as Access;
+          this.advance();
+          continue;
+        }
 
         /*
          * Every member goes through the normal specifier path, which already knows
@@ -557,6 +609,34 @@ class Parser {
           this.error(this.peek(), `expected a member declaration, found "${this.peek().text}"`);
           this.skipToStatementEnd();
           continue;
+        }
+
+        /*
+         * A member function is not part of the layout, so it is recorded separately:
+         * the fields stay a plain C struct, and the methods become functions whose
+         * scope has a `this`.
+         */
+        if (this.tokenAt(this.index)?.text !== ';') {
+          const savedIndex = this.index;
+          const methodStart = this.peek().start;
+          const declarator = this.parseDeclarator(spec.type);
+          if (declarator.type.kind === 'function' && declarator.name !== undefined) {
+            let body: CompoundStmt | undefined;
+            if (this.check('{')) body = this.parseCompound();
+            else this.consumeOptionalSemicolon();
+            methods.push({
+              name: declarator.name,
+              returnType: declarator.type.returnType ?? spec.type,
+              params: declarator.type.params ?? [],
+              ...(body ? { body } : {}),
+              access,
+              start: methodStart,
+              end: this.previousEnd(),
+            });
+            continue;
+          }
+          // Not a function after all: put it back and read it as data.
+          this.index = savedIndex;
         }
 
         // A nested definition is honest about not being laid out by this engine, and
@@ -585,6 +665,7 @@ class Parser {
             members.push({
               name: declarator.name,
               type: declarator.type,
+              access,
               start: declStart,
               end: this.previousEnd(),
             });
@@ -616,6 +697,8 @@ class Parser {
       isUnion,
       isDefinition,
       members,
+      ...(isClass ? { isClass: true } : {}),
+      ...(methods.length > 0 ? { methods } : {}),
       start: keyword.start,
       end: this.previousEnd(),
     };
@@ -901,6 +984,19 @@ class Parser {
     if (this.check('namespace')) {
       const opened = this.parseNamespaceBlock();
       if (opened) return opened;
+    }
+
+    /*
+     * `class Counter { ... };` - the same layout as a struct with a different default
+     * access, so it goes down the same path. Handled here because `class` is otherwise
+     * caught by the unsupported-construct check.
+     */
+    if (this.check('class')) {
+      const declared = this.parseStructSpecifier(false, true);
+      if (declared) {
+        this.consumeOptionalSemicolon();
+        return [declared];
+      }
     }
 
     /*

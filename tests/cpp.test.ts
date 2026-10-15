@@ -194,13 +194,21 @@ describe('C++ resolution: containers and algorithms', () => {
 });
 
 describe('C++ resolution: what still needs clang', () => {
-  it('says so for a class definition, once', () => {
-    const analysis = analyse('class Widget { public: int size; };\nint main() { return 0; }');
+  it('runs a class definition now, with no warning at all', () => {
+    const analysis = analyse(
+      [
+        'class Widget {',
+        '    int size;',
+        'public:',
+        '    void grow() { size = size + 1; }',
+        '    int current() { return size; }',
+        '};',
+        'int main() { return 0; }',
+      ].join('\n'),
+    );
 
     expect(analysis.errorCount).toBe(0);
-    const warnings = analysis.diagnostics.filter((item) => item.severity === 'warning');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.message).toContain('class');
+    expect(analysis.diagnostics).toEqual([]);
   });
 
   it('runs a namespace now, and calls into it by its qualified name', () => {

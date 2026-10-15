@@ -31,6 +31,13 @@ export interface CTypeMember {
   readonly name: string;
   readonly type: CType;
   readonly offset: number;
+  /**
+   * Who may touch it.
+   *
+   * Carried on the layout because that is what a member access has in hand - the
+   * struct's CType - and `class` is only `struct` with a different default.
+   */
+  readonly access?: 'public' | 'private' | 'protected';
 }
 
 export interface CType {
@@ -474,7 +481,11 @@ export class TypeResolver {
 
   registerStruct(
     tag: string | undefined,
-    members: readonly { readonly name: string; readonly type: TypeRef }[],
+    members: readonly {
+      readonly name: string;
+      readonly type: TypeRef;
+      readonly access?: 'public' | 'private' | 'protected';
+    }[],
     isUnion: boolean,
   ): CType {
     const laid = this.layout(members, isUnion, tag);
@@ -509,7 +520,11 @@ export class TypeResolver {
   }
 
   private layout(
-    members: readonly { readonly name: string; readonly type: TypeRef }[],
+    members: readonly {
+      readonly name: string;
+      readonly type: TypeRef;
+      readonly access?: 'public' | 'private' | 'protected';
+    }[],
     isUnion: boolean,
     tag: string | undefined,
   ): CType {
@@ -522,7 +537,12 @@ export class TypeResolver {
       const alignment = alignOf(memberType);
       maxAlign = Math.max(maxAlign, alignment);
       const memberOffset = isUnion ? 0 : alignUp(offset, alignment);
-      laid.push({ name: member.name, type: memberType, offset: memberOffset });
+      laid.push({
+        name: member.name,
+        type: memberType,
+        offset: memberOffset,
+        ...(member.access ? { access: member.access } : {}),
+      });
       offset = isUnion
         ? Math.max(offset, memberType.size)
         : memberOffset + memberType.size;
