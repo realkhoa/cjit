@@ -82,7 +82,7 @@ export const PREFERRED_RUN_ENGINE_ID: EngineId = 'clang-wasm';
 
 export type RunState = 'idle' | 'running';
 export type AnalysisState = 'idle' | 'analyzing';
-export type ConsoleTab = 'output' | 'problems' | 'runtime' | 'stdin';
+export type ConsoleTab = 'output' | 'problems' | 'runtime' | 'memory' | 'stdin';
 export type OutputKind = 'stdout' | 'stderr' | 'system';
 
 export interface OutputLine {

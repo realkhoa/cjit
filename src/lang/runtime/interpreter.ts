@@ -52,7 +52,7 @@ import {
 } from '@/lang/runtime/value';
 import type { Value } from '@/lang/runtime/value';
 import type { SourcePos } from '@/lang/token';
-import type { SafetyEvent, SafetyKind } from '@/engine/types';
+import type { MemoryView, PointerChain, PointerNode, SafetyEvent, SafetyKind } from '@/engine/types';
 
 /**
  * Tree-walking C interpreter.
@@ -137,6 +137,8 @@ export interface ExecutionResult {
    * can be listed together, including the ones that did not stop the program.
    */
   readonly safety: readonly SafetyEvent[];
+  /** Live memory blocks and pointer chains, for the memory view. */
+  readonly memory: MemoryView;
 }
 
 export interface ExecuteOptions {
@@ -170,6 +172,14 @@ const MAX_CHILDREN = 24;
 const MAX_LINE_STATES = 2_000;
 /** Ceiling on collected runtime safety events. */
 const MAX_SAFETY_EVENTS = 50;
+
+/** Memory view limits: enough to see a structure, bounded so it cannot flood the UI. */
+const MAX_MEMORY_BLOCKS = 8;
+const MEMORY_BYTES_PER_BLOCK = 96;
+const MAX_POINTER_CHAINS = 4;
+const MAX_CHAIN_NODES = 8;
+/** Cap on the fields shown per node, matching the watch pane's children cap. */
+const MAX_NODE_FIELDS = 6;
 
 /** How a safety event should be presented, by kind. */
 const SAFETY_SEVERITY: Readonly<Record<SafetyKind, SafetyEvent['severity']>> = {
@@ -395,6 +405,8 @@ class Interpreter {
   private readonly warnedUninitialized = new Set<number>();
   private readonly literalCache = new Map<Expression, { address: number; length: number }>();
   private readonly allocations = new Map<number, number>();
+  /** Allocations the program itself asked for (`malloc`, `new`, and their friends). */
+  private readonly userAllocations = new Map<number, number>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -490,7 +502,9 @@ class Interpreter {
 
     // Reported as information, not as a bug: a program that ends immediately has
     // no reason to free anything, but a growing allocation count is worth seeing.
-    const unfreed = this.memory.unfreedBytes;
+    // Only the program's own allocations count; the interpreter's buffers are not
+    // leaks.
+    const unfreed = [...this.userAllocations.values()].reduce((total, size) => total + size, 0);
     if (unfreed > 0) {
       this.recordSafety(
         'leak',
@@ -514,7 +528,107 @@ class Interpreter {
       historyLength: this.history.length,
       truncated: this.truncated,
       safety: [...this.safetyEvents],
+      memory: this.buildMemoryView(),
     };
+  }
+
+  /**
+   * What the program's memory holds, and where its pointers lead.
+   *
+   * A linked list is the thing every C course draws on a whiteboard, and the pane
+   * that shows variables cannot show it: `next` is just an address there. Walking
+   * it here, with a cycle and a depth limit reported rather than hidden, is the
+   * difference between "0x1040" and the shape of the data.
+   */
+  private buildMemoryView(): MemoryView {
+    // The heap the program sees: what it asked for, not what the interpreter keeps
+    // for itself.
+    const live = [...this.userAllocations.entries()]
+      .map(([address, size]) => ({ address, size }))
+      .sort((left, right) => left.address - right.address);
+
+    const blocks = live.slice(0, MAX_MEMORY_BLOCKS).map((block) => {
+      const bytes = this.memory.slice(block.address, Math.min(block.size, MEMORY_BYTES_PER_BLOCK));
+      return {
+        address: block.address,
+        size: block.size,
+        bytes: [...bytes],
+        truncated: block.size > bytes.length,
+      };
+    });
+
+    const chains: PointerChain[] = [];
+    for (const binding of this.allBindings) {
+      if (chains.length >= MAX_POINTER_CHAINS) break;
+      if (binding.type.kind !== 'pointer') continue;
+
+      const chain = this.followPointer(binding);
+      if (chain) chains.push(chain);
+    }
+
+    return {
+      blocks,
+      chains,
+      truncated: live.length > blocks.length || chains.length >= MAX_POINTER_CHAINS,
+    };
+  }
+
+  /**
+   * Follows a pointer through a chain of structs, the way a linked list is walked.
+   *
+   * Follows the first pointer-valued member of each node (the conventional `next`),
+   * stopping at null, at a repeat (a cycle), or at the depth limit.
+   */
+  private followPointer(binding: Binding): PointerChain | null {
+    const start = this.memory.readUint64(binding.address);
+    const nodes: PointerNode[] = [];
+    const seen = new Set<number>();
+    let address = start;
+    let end: PointerChain['end'] = 'unknown';
+
+    while (nodes.length < MAX_CHAIN_NODES) {
+      if (address === 0) {
+        end = 'null';
+        break;
+      }
+      if (seen.has(address)) {
+        end = 'cycle';
+        break;
+      }
+      if (!this.memory.isValid(address, 1)) {
+        end = 'unknown';
+        break;
+      }
+      seen.add(address);
+
+      const type = binding.type.pointee;
+      if (!type) break;
+
+      const fields: { name: string; value: string }[] = [];
+      let nextAddress = 0;
+      const members = type.kind === 'struct' || type.kind === 'union' ? (type.members ?? []) : [];
+
+      for (const member of members) {
+        if (fields.length >= MAX_NODE_FIELDS) break;
+        const memberAddress = address + member.offset;
+        const value = this.load(member.type, memberAddress, undefined, false);
+        fields.push({ name: member.name, value: formatValue(value, this.memory) });
+        if (nextAddress === 0 && member.type.kind === 'pointer') {
+          const raw = this.memory.readUint64(memberAddress);
+          if (raw !== 0) nextAddress = raw;
+        }
+      }
+
+      nodes.push({ address, fields });
+      if (nextAddress === 0) {
+        end = 'null';
+        break;
+      }
+      address = nextAddress;
+    }
+
+    if (nodes.length === MAX_CHAIN_NODES && end === 'unknown') end = 'limit';
+    return nodes.length > 0 ? { name: binding.name, nodes, end } : null;
   }
 
   private prepare(): void {
@@ -1731,8 +1845,21 @@ class Interpreter {
         voidType: VOID_TYPE,
       },
       rng: this.rng,
-      alloc: (size) => this.builtinAlloc(size),
-      free: (address) => this.builtinFree(address),
+      alloc: (size) => {
+        const address = this.builtinAlloc(size);
+        /*
+         * Tracked separately from `allocations`, because that map also holds the
+         * interpreter's own buffers - string literals, vector storage, argv. Those
+         * are not the program's allocations, and counting them made every program
+         * look like it leaked.
+         */
+        this.userAllocations.set(address, Math.max(Math.trunc(size), 1));
+        return address;
+      },
+      free: (address) => {
+        this.userAllocations.delete(address);
+        this.builtinFree(address);
+      },
       allocationSize: (address) => this.allocations.get(address),
       readString: (address) => this.memory.readCString(address),
       writeString: (address, text) => {

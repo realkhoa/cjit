@@ -109,6 +109,20 @@ describe('collecting safety events', () => {
     expect(result.safety.filter((event) => event.kind !== 'leak')).toEqual([]);
   });
 
+  it('does not call the interpreter\u2019s own buffers a leak', () => {
+    // String literals, vector storage and argv are allocated by the interpreter on
+    // the program's behalf. Counting them made every program look like it leaked;
+    // only what the program asks for with malloc/new counts.
+    const result = run(
+      ['#include <stdio.h>', 'int main(void) {', '    printf("a string literal\\n");', '    return 0;', '}'].join(
+        '\n',
+      ),
+    );
+
+    expect(result.status).toBe('ok');
+    expect(result.safety.filter((event) => event.kind === 'leak')).toEqual([]);
+  });
+
   it('caps how many events it keeps', () => {
     const lines = ['int main(void) {'];
     for (let index = 0; index < 80; index += 1) lines.push('    int value;');

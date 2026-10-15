@@ -7,6 +7,7 @@ import type {
   WatchSnapshot,
   WatchStatus,
 } from '@/engine/types';
+import { emptyMemoryView } from '@/engine/types';
 import { analyzeSource } from '@/lang/analyze';
 import type { AnalysisResult } from '@/lang/analyze';
 import { publishAnalysis } from '@/lang/analysisCache';
@@ -115,6 +116,8 @@ export function buildCompileErrorSnapshot(analysis: AnalysisResult): WatchSnapsh
     history: [],
     // Nothing ran, so nothing could go wrong at runtime.
     safety: [],
+    // ...and there is no memory to show either.
+    memory: emptyMemoryView(),
   };
 }
 
@@ -155,6 +158,7 @@ export function buildWatchSnapshot(
       vars: entry.vars.map(toVarNode),
     })),
     safety: result.safety,
+    memory: result.memory,
   };
 }
 

@@ -187,10 +187,6 @@ class Parser {
     );
   }
 
-  private info(token: Token, message: string): void {
-    this.diagnostics.push(makeDiagnostic('info', message, token.file, token.start, token.end));
-  }
-
   private expect(text: string, message: string): Token | undefined {
     if (this.check(text)) return this.advance();
     this.error(this.peek(), message);
@@ -462,23 +458,37 @@ class Parser {
       while (!this.atEnd() && !this.check('}')) {
         const before = this.index;
 
-        // Nested/anonymous struct or union.
-        if (this.check('struct') || this.check('union') || this.check('enum')) {
-          const nestedToken = this.peek();
-          const nested =
-            nestedToken.text === 'enum'
-              ? this.parseEnumSpecifier()
-              : this.parseStructSpecifier(nestedToken.text === 'union');
-          if (nested) this.info(nestedToken, `nested ${nestedToken.text} declaration is not executed by the fast engine`);
-          if (this.check(';')) this.advance();
-          if (this.index === before) this.advance();
-          continue;
-        }
-
+        /*
+         * Every member goes through the normal specifier path, which already knows
+         * how to read `struct X`, `struct X { ... }` and an anonymous `struct { ... }`.
+         * Intercepting `struct` here treated `struct Node *next;` as a nested
+         * definition and swallowed the member - which is why a self-referential
+         * struct, the shape every linked list needs, failed to parse unless a
+         * typedef happened to come first.
+         */
         const spec = this.parseDeclarationSpecifiers();
         if (!spec.consumed) {
           this.error(this.peek(), `expected a member declaration, found "${this.peek().text}"`);
           this.skipToStatementEnd();
+          continue;
+        }
+
+        // A nested definition is honest about not being laid out by this engine, and
+        // says what to do instead: the program would otherwise fail later with a
+        // message that does not explain itself.
+        for (const node of spec.elaborated) {
+          if ('isDefinition' in node && node.isDefinition) {
+            this.warn(
+              this.peek(),
+              `nested ${node.kind} definition is not laid out by the fast engine — declare it at file scope (Run with clang handles it)`,
+            );
+          }
+        }
+
+        // `struct { int x; };` declares a type and no member.
+        if (this.check(';')) {
+          this.advance();
+          if (this.index === before) this.advance();
           continue;
         }
 

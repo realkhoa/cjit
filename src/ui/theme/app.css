@@ -570,6 +570,59 @@ button {
   white-space: nowrap;
 }
 
+/* ---------- memory view ---------- */
+
+.memory {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-family: var(--vs-font-mono);
+  font-size: 12px;
+}
+
+.memory__chain,
+.memory__blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.memory__title {
+  color: var(--vs-accent);
+}
+
+.memory__node,
+.memory__row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: pre;
+}
+
+.memory__address {
+  flex: 0 0 74px;
+  color: var(--vs-text-muted);
+}
+
+.memory__fields,
+.memory__hex {
+  color: var(--vs-text);
+}
+
+.memory__ascii {
+  color: var(--vs-text-dim);
+}
+
+.memory__end {
+  color: var(--vs-text-muted);
+  font-style: italic;
+}
+
+.memory__block-head {
+  color: var(--vs-text-dim);
+  margin-top: 4px;
+}
+
 /* A save failure has to be impossible to miss: the app works while losing work. */
 .statusbar__warning {
   padding: 0 6px;

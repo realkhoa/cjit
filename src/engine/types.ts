@@ -91,6 +91,44 @@ export interface SafetyEvent {
 }
 
 /**
+ * How a pointer walk ended.
+ *
+ * `cycle` and `limit` are reported rather than hidden: a diagram that quietly
+ * stopped would suggest the chain ended, which is exactly the wrong thing for
+ * someone learning linked lists.
+ */
+export type PointerWalkEnd = 'null' | 'cycle' | 'limit' | 'unknown';
+
+export interface PointerNode {
+  readonly address: number;
+  /** The fields at that address, already formatted. */
+  readonly fields: readonly { readonly name: string; readonly value: string }[];
+}
+
+export interface PointerChain {
+  /** The variable the walk started from. */
+  readonly name: string;
+  readonly nodes: readonly PointerNode[];
+  readonly end: PointerWalkEnd;
+}
+
+export interface MemoryBlockView {
+  readonly address: number;
+  readonly size: number;
+  /** The first bytes of the block, for a hex dump. */
+  readonly bytes: readonly number[];
+  /** True when the block is longer than the bytes shown. */
+  readonly truncated: boolean;
+}
+
+export interface MemoryView {
+  readonly blocks: readonly MemoryBlockView[];
+  readonly chains: readonly PointerChain[];
+  /** True when caps dropped blocks or chains. */
+  readonly truncated: boolean;
+}
+
+/**
  * Variable values as they were the first time a given line finished running.
  * This is what lets the watch pane answer "what do the variables hold at the
  * line my cursor is on?" instead of only showing the final state.
@@ -142,6 +180,11 @@ export interface WatchSnapshot {
   readonly history: readonly WatchHistoryEntry[];
   /** Runtime safety events collected during the pass that produced this snapshot. */
   readonly safety: readonly SafetyEvent[];
+  /**
+   * What the program's memory looks like: live blocks and pointer chains, for
+   * engines that model memory. Empty for a real compiler run.
+   */
+  readonly memory: MemoryView;
 }
 
 export interface RunOutcome {
@@ -228,6 +271,11 @@ export function emptyWatch(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
     lineStates: [],
     history: [],
     safety: [],
+    memory: { blocks: [], chains: [], truncated: false },
     ...patch,
   };
+}
+
+export function emptyMemoryView(): MemoryView {
+  return { blocks: [], chains: [], truncated: false };
 }

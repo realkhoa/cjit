@@ -1,5 +1,6 @@
 import { revealPosition } from '@/editor/navigation';
 import type { SafetyKind } from '@/engine/types';
+import { chainEndLabel, chainSummary, formatAddress, hexDump } from '@/ui/memoryFormat';
 import { useAppStore } from '@/state/store';
 import type { ConsoleTab } from '@/state/store';
 
@@ -7,6 +8,7 @@ const TABS: readonly { readonly id: ConsoleTab; readonly label: string }[] = [
   { id: 'output', label: 'Output' },
   { id: 'problems', label: 'Problems' },
   { id: 'runtime', label: 'Runtime' },
+  { id: 'memory', label: 'Memory' },
   { id: 'stdin', label: 'Stdin' },
 ];
 
@@ -24,6 +26,7 @@ export function ConsolePanel() {
   const output = useAppStore((state) => state.output);
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
   const safety = useAppStore((state) => state.watch.safety);
+  const memory = useAppStore((state) => state.watch.memory);
   const engineLabel = useAppStore((state) => state.watch.engineLabel);
   const consoleTab = useAppStore((state) => state.consoleTab);
   const setConsoleTab = useAppStore((state) => state.setConsoleTab);
@@ -93,6 +96,61 @@ export function ConsolePanel() {
                   <span className="problem__msg">{diagnostic.message}</span>
                 </button>
               ))}
+            </div>
+          )}
+        </div>
+      ) : consoleTab === 'memory' ? (
+        <div className="console__body">
+          {memory.chains.length === 0 && memory.blocks.length === 0 ? (
+            <span className="console__hint">
+              {engineLabel.toLowerCase().includes('clang')
+                ? 'Engine clang không mô hình hoá memory: nó biên dịch và chạy thật, còn khối nhớ nằm trong module wasm. Chuyển sang fast engine để xem cấu trúc dữ liệu.'
+                : 'Chương trình chưa cấp phát gì bằng malloc/new, và không có con trỏ nào trỏ tới struct — nên chưa có gì để vẽ.'}
+            </span>
+          ) : (
+            <div className="memory">
+              {memory.chains.map((chain) => (
+                <div key={`chain-${chain.name}`} className="memory__chain">
+                  <div className="memory__title" title={chainEndLabel(chain.end)}>
+                    {chainSummary(chain)}
+                  </div>
+                  {chain.nodes.map((node, index) => (
+                    <div key={`${chain.name}-${node.address}`} className="memory__node">
+                      <span className="memory__address">{formatAddress(node.address)}</span>
+                      <span className="memory__fields">
+                        {node.fields.map((field) => `${field.name} = ${field.value}`).join(', ')}
+                      </span>
+                      {index === chain.nodes.length - 1 ? (
+                        <span className="memory__end">→ {chainEndLabel(chain.end)}</span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ))}
+
+              {memory.blocks.length > 0 ? (
+                <div className="memory__blocks">
+                  <div className="memory__title">
+                    Bộ nhớ chương trình đã cấp phát (malloc/new)
+                    {memory.truncated ? ' · đã lược bớt' : ''}
+                  </div>
+                  {memory.blocks.map((block) => (
+                    <div key={`block-${block.address}`} className="memory__block">
+                      <div className="memory__block-head">
+                        {formatAddress(block.address)} · {block.size} byte
+                        {block.truncated ? ' (chỉ hiện phần đầu)' : ''}
+                      </div>
+                      {hexDump(block.address, block.bytes).map((row) => (
+                        <div key={`${block.address}-${row.address}`} className="memory__row">
+                          <span className="memory__address">{row.address}</span>
+                          <span className="memory__hex">{row.hex}</span>
+                          <span className="memory__ascii">{row.ascii}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
         </div>

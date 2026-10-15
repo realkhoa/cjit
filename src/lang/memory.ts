@@ -51,6 +51,26 @@ export class Memory {
     return this.usedBytes;
   }
 
+  /**
+   * The blocks still held, in address order.
+   *
+   * This is what the memory view shows: not every byte the interpreter reserved,
+   * only what the program actually has a live claim on.
+   */
+  liveBlocks(): readonly { readonly address: number; readonly size: number }[] {
+    return this.blocks
+      .filter((block) => !block.free)
+      .map((block) => ({ address: block.address, size: block.size }))
+      .sort((left, right) => left.address - right.address);
+  }
+
+  /** Bytes from `address`, or an empty view when the range is not valid. */
+  slice(address: number, length: number): Uint8Array {
+    if (!this.isValid(address, Math.max(length, 1))) return new Uint8Array(0);
+    const end = Math.min(address + length, this.capacity);
+    return this.bytes.subarray(address, end);
+  }
+
   isValid(address: number, size = 1): boolean {
     return (
       Number.isInteger(address) &&

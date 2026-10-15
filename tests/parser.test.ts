@@ -148,6 +148,41 @@ describe('parser: declarations', () => {
     expect(type?.pointee?.params).toHaveLength(2);
   });
 
+  it('parses a self-referential struct, which is what a linked list needs', () => {
+    // `struct Node *next;` used to be swallowed as a nested struct definition,
+    // which made the member list empty and every linked list unparseable unless a
+    // typedef happened to come first.
+    const result = parseSource(
+      [
+        'struct Node { int value; struct Node *next; };',
+        'struct Wrapper { struct Node *head; };',
+        'struct Outer { struct Inner { int deep; } inner; };',
+      ].join('\n'),
+    );
+
+    expect(errors(result)).toEqual([]);
+
+    const node = declarationAt(result, 0);
+    expect(node.kind).toBe('struct');
+    if (node.kind === 'struct') {
+      expect(node.members.map((member) => member.name)).toEqual(['value', 'next']);
+      // The member is a pointer to the struct being defined.
+      expect(node.members[1]?.type.kind).toBe('pointer');
+    }
+
+    const wrapper = declarationAt(result, 1);
+    if (wrapper.kind === 'struct') {
+      expect(wrapper.members.map((member) => member.name)).toEqual(['head']);
+    }
+
+    // A genuine nested definition still parses as a nested definition.
+    const outer = declarationAt(result, 2);
+    expect(outer.kind).toBe('struct');
+    if (outer.kind === 'struct') {
+      expect(outer.members.map((member) => member.name)).toEqual(['inner']);
+    }
+  });
+
   it('parses structs, typedefs and enums', () => {
     const result = parseSource(
       [

@@ -154,6 +154,31 @@ Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu v
 - **`#include <`** gợi ý toàn bộ header mà engine biết.
 - **Hover** thêm giá trị mà biến có **tại dòng đang trỏ**.
 
+### Memory & pointer view (tab `Memory`)
+
+Tab **Memory** trong console vẽ thứ mà bảng biến không vẽ được:
+
+- **Chuỗi con trỏ**: mỗi biến con trỏ tới struct được **đi theo từng node**, in ra `head → 2 node → NULL` và
+  từng node kèm field (`0x1000  value = 1, next = 0x1010`). Đây là hình mà mọi khoá C vẽ lên bảng — linked list.
+- **Kết thúc walk luôn được nói ra**: `NULL`, `cycle — trỏ quay lại node đã đi qua`, hay
+  `… dừng ở giới hạn số node`. Một sơ đồ im lặng dừng lại sẽ khiến người học tưởng list đã hết, nên nó không im lặng.
+- **Hex dump** các block chương trình **tự cấp phát** (`malloc`/`new`): địa chỉ, byte, cột ASCII.
+
+Giới hạn (bounded, để không làm ngập UI): 4 chain, 8 node/chain, 8 block, 96 byte/block, 6 field/node.
+Với clang thì tab ghi rõ engine đó **không mô hình hoá memory** (khối nhớ nằm trong module wasm) — không hiển thị
+gì cả thay vì hiển thị sai.
+
+Sửa kèm hai bug thật mà việc này phơi ra:
+
+- **`struct Node { struct Node *next; };` không parse được** — member kiểu `struct X *` bị tưởng là nested struct
+  definition và bị nuốt mất, nên **linked list không viết được** trừ khi có `typedef` đứng trước (đó là lý do lọt
+  lưới). Giờ mọi member đi qua đường specifier chuẩn, và nested definition *có/không* declarator đều parse đúng.
+  Nested definition vẫn được cảnh báo rõ ràng vì fast engine không layout nó (chương trình sẽ fail lúc chạy —
+  đã kiểm chứng) và cảnh báo nói luôn cách sửa: khai báo ở file scope, hoặc Run bằng clang.
+- **Leak báo sai cho mọi chương trình**: `builtinAlloc` dùng chung cho cả `malloc` của user lẫn buffer nội bộ của
+  interpreter (string literal, vector, argv), nên chương trình `int main(void){ return 0; }` cũng "rò rỉ". Giờ chỉ
+  cấp phát do chương trình yêu cầu mới tính.
+
 ### Console: 4 tab, gồm Runtime issues
 
 `Output` · `Problems` · **`Runtime`** · `Stdin`. Tab **Runtime** gom những gì chương trình làm mà compiler chấp
@@ -173,6 +198,28 @@ Giờ đường đọc để hiển thị không tính là đọc của chương
 
 Khi Run bằng **clang**, tab ghi rõ engine đó chỉ build và chạy, **không kiểm tra an toàn lúc chạy** — để một báo
 cáo trống không bị hiểu là "chương trình đã được kiểm tra và sạch".
+
+### Không mất dữ liệu — và sao lưu ra file
+
+Mọi đường có thể phá file đều đã được làm cho hoàn tác được:
+
+| Đường | Hành vi |
+|---|---|
+| Đổi example (dropdown cũ) | dropdown đã **xoá**; hành động nền chỉ **mở thành file mới** |
+| Mở **share link** | **thêm** file vào workspace (trùng tên → tên trống), không thay thế |
+| Xoá file | vào **Trash** (giữ nguyên nội dung); Explorer có **Restore**, restore không bao giờ ghi đè |
+| **Reset workspace** | file cũ **vẫn nằm trong Trash** |
+| **Empty trash** | hành động **duy nhất** không hoàn tác được, và nó hỏi trước |
+| Browser từ chối lưu (hết dung lượng / private mode) | cảnh báo ở **status bar** + console, tự tắt khi lưu được lại |
+
+Trash giữ tối đa **20 entry**. Rủi ro còn lại — browser xoá cả `localStorage` (clear site data, evict, private
+mode) — thì không gì *trong* app cứu được, nên **Settings → Sao lưu / phục hồi**:
+
+- `Export workspace…` tải toàn bộ workspace (kể cả file đang trong Trash) thành một file JSON
+  `cjit-workspace-YYYY-MM-DD.json`.
+- `Import backup…` **thêm** các file đó vào workspace hiện tại — **không thay thế**; trùng tên thì lấy tên trống,
+  tên không hợp lệ bị bỏ qua và **đếm ra** trong thông báo. Backup sai định dạng, rỗng, sai version hoặc quá lớn
+  thì bị từ chối kèm lý do cụ thể.
 
 ### Tải thành quả build về máy
 
