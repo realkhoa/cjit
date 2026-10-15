@@ -597,6 +597,44 @@ class Parser {
         }
 
         /*
+         * A constructor or destructor has no return type, so `Counter(...)` cannot go
+         * through the specifier path: it would read `Counter` as an unknown type name
+         * and fail. It is recognised by name instead - the class's own name, or `~` and
+         * that name.
+         */
+        if (tag !== undefined) {
+          const bareTag = tag.slice(tag.lastIndexOf('::') + 1);
+          const isDestructor = this.check('~') && this.tokenAt(this.index + 1)?.text === bareTag;
+          const isConstructor = !isDestructor && this.check(bareTag) && this.tokenAt(this.index + 1)?.text === '(';
+
+          if (isConstructor || isDestructor) {
+            const memberStart = this.peek().start;
+            if (isDestructor) this.advance();
+            this.advance();
+            // `parseParameterList` starts after the `(`, as it does for a function.
+            this.expect('(', "expected '(' after the constructor name");
+            const parsed = this.parseParameterList();
+            let body: CompoundStmt | undefined;
+            if (this.check('{')) body = this.parseCompound();
+            else this.consumeOptionalSemicolon();
+            methods.push({
+              name: isDestructor ? `~${bareTag}` : bareTag,
+              // A constructor has no return type; the class's own type stands in, so the
+              // node shape stays the same as every other function.
+              returnType: { kind: 'named', name: tag, qualifiers: [], start: memberStart, end: memberStart },
+              params: parsed.params,
+              ...(body ? { body } : {}),
+              access,
+              ...(isDestructor ? { isDestructor: true } : { isConstructor: true }),
+              start: memberStart,
+              end: this.previousEnd(),
+            });
+            if (this.index === before) this.advance();
+            continue;
+          }
+        }
+
+        /*
          * Every member goes through the normal specifier path, which already knows
          * how to read `struct X`, `struct X { ... }` and an anonymous `struct { ... }`.
          * Intercepting `struct` here treated `struct Node *next;` as a nested
@@ -831,6 +869,26 @@ class Parser {
     let name: string | undefined;
     if (this.isNameToken(this.peek())) {
       name = this.advance().text;
+
+      /*
+       * `Number operator+(Number a, Number b)`: the declared name is the operator itself,
+       * so it is read as one name - `operator+` - which is what a call then looks up.
+       */
+      if (name === 'operator') {
+        const symbol = this.peek();
+        if (symbol.text === '[' && this.tokenAt(this.index + 1)?.text === ']') {
+          this.advance();
+          this.advance();
+          name = 'operator[]';
+        } else if (symbol.text === '(' && this.tokenAt(this.index + 1)?.text === ')') {
+          this.advance();
+          this.advance();
+          name = 'operator()';
+        } else if (symbol.kind === 'punctuator' || symbol.text.endsWith('=')) {
+          this.advance();
+          name = `operator${symbol.text}`;
+        }
+      }
     }
 
     // Pointers bind first, then suffixes: `char *argv[]` is an array of pointers.
@@ -929,9 +987,15 @@ class Parser {
         break;
       }
       const declarator = this.parseDeclarator(spec.type);
+      let defaultValue: Expression | undefined;
+      if (this.check('=')) {
+        this.advance();
+        defaultValue = this.parseAssignmentExpression();
+      }
       params.push({
         ...(declarator.name === undefined ? {} : { name: declarator.name }),
         type: declarator.type,
+        ...(defaultValue === undefined ? {} : { defaultValue }),
         start: startToken.start,
         end: this.previousEnd(),
       });

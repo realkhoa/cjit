@@ -461,6 +461,17 @@ class Interpreter {
   private readonly overloadedNames = new Set<string>();
   /** Access of each registered method, keyed by its qualified name. */
   private readonly methodAccess = new Map<string, 'public' | 'private' | 'protected'>();
+  /** Constructors by class tag and parameter count. */
+  private readonly constructors = new Map<string, Map<number, FunctionDeclNode>>();
+  /** Destructor by class tag. */
+  private readonly destructors = new Map<string, FunctionDeclNode>();
+  /** Locals waiting to be destroyed, with the scope they belong to. */
+  private readonly pendingDestruction: Array<{
+    readonly depth: number;
+    readonly address: number;
+    readonly type: CType;
+    readonly tag: string;
+  }> = [];
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -795,6 +806,21 @@ class Interpreter {
   }
 
   private popScope(): void {
+    /*
+     * A local object with a destructor is destroyed on the way out, most recent first -
+     * which is what makes a destructor that prints, or that releases something, behave
+     * the way the program says it should.
+     */
+    const depth = this.scopes.length;
+    for (let index = this.pendingDestruction.length - 1; index >= 0; index -= 1) {
+      const entry = this.pendingDestruction[index];
+      if (!entry || entry.depth !== depth) continue;
+      this.pendingDestruction.splice(index, 1);
+
+      const destructor = this.destructors.get(entry.tag);
+      if (destructor) this.callFunction(destructor, [], entry.address, entry.type);
+    }
+
     this.scopes.pop();
   }
 
@@ -842,6 +868,67 @@ class Interpreter {
 
     let type = this.resolver.resolve(declaration.type);
     let address: number;
+
+    /*
+     * A class with a constructor: the storage is zeroed and then the constructor runs, so
+     * `Counter counter;` and `Counter counter{5};` build the object the class describes.
+     * A class with a destructor has the object recorded, to be destroyed at scope exit.
+     *
+     * A class with *neither* keeps the ordinary path below, where members start
+     * indeterminate and reading one is reported - as C and C++ both have it.
+     */
+    const classTag = bareTagName(type.name);
+    const constructorSet = this.constructors.get(classTag);
+    const destructor = this.destructors.get(classTag);
+
+    if (constructorSet || destructor) {
+      address = this.allocateFor(type);
+      this.memory.fill(address, 0, Math.max(type.size, 1));
+
+      // `Counter counter{5};` passes arguments; `Counter counter;` passes none.
+      const initializer = declaration.initializer;
+      const argumentExpressions = initializer?.kind === 'init-list' ? initializer.items : [];
+      const constructor = constructorSet?.get(argumentExpressions.length);
+
+      if (constructorSet && !constructor) {
+        throw new RuntimeFault(
+          `'${classTag}' has no constructor taking ${argumentExpressions.length} argument(s)`,
+          declaration.start,
+        );
+      }
+
+      if (constructor) {
+        this.callFunction(
+          constructor,
+          this.callArguments(argumentExpressions, constructor),
+          address,
+          type,
+        );
+      }
+
+      const built: Binding = {
+        name: declaration.name,
+        type,
+        address,
+        storage,
+        scopeName,
+        declaredAt: declaration.start,
+      };
+      this.bind(built);
+
+      /*
+       * No constructor but a destructor: the object is still an aggregate, so an
+       * initializer fills it the ordinary way - `Noisy outer{"outer"};` must set the
+       * member, destructor or not.
+       */
+      if (!constructor && initializer) this.initialize(built, initializer);
+
+      // Only a local object is destroyed by the engine; a global lives to the end.
+      if (destructor && storage === 'local') {
+        this.pendingDestruction.push({ depth: this.scopes.length, address, type, tag: classTag });
+      }
+      return;
+    }
 
     /*
      * `int& total = sum;` and `const int& limit = other;` bind the initializer itself
@@ -1631,6 +1718,24 @@ class Interpreter {
     const left = this.decay(leftRaw);
     const right = this.decay(rightRaw);
 
+    /*
+     * A user-defined operator, declared as the free function C++ allows:
+     * `Number operator+(Number a, Number b)`. It is consulted before the built-in
+     * arithmetic, because a class that defines `+` means it - and the engine must not
+     * quietly add the two objects' bytes instead.
+     */
+    const overloaded = this.definitions.get(`operator${operator}`);
+    if (
+      overloaded &&
+      (leftRaw.kind === 'aggregate' || left.kind === 'aggregate' ||
+        rightRaw.kind === 'aggregate' || right.kind === 'aggregate')
+    ) {
+      return this.callFunction(
+        overloaded,
+        this.callArguments([expression.left, expression.right], overloaded),
+      );
+    }
+
     // `std::string` concatenation, in either operand position.
     if (operator === '+' && (isStringType(leftRaw.type) || isStringType(rightRaw.type))) {
       return this.makeString(this.plainText(leftRaw) + this.plainText(rightRaw));
@@ -1997,7 +2102,7 @@ class Interpreter {
         qualified,
         method.access ?? (declaration.isClass ? 'private' : 'public'),
       );
-      this.registerFunction({
+      const declared: FunctionDeclNode = {
         kind: 'function',
         name: qualified,
         returnType: method.returnType,
@@ -2007,7 +2112,17 @@ class Interpreter {
         body: method.body,
         start: method.start,
         end: method.end,
-      });
+      };
+      this.registerFunction(declared);
+
+      if (method.isConstructor) {
+        // Overloaded constructors are told apart by how many arguments they take, which
+        // is as much as this engine needs to pick the right one.
+        const byArity = this.constructors.get(tag) ?? new Map<number, FunctionDeclNode>();
+        byArity.set(method.params.length, declared);
+        this.constructors.set(tag, byArity);
+      }
+      if (method.isDestructor) this.destructors.set(tag, declared);
     }
   }
 
@@ -2226,10 +2341,52 @@ class Interpreter {
   private callArguments(args: readonly Expression[], target: FunctionDeclNode): Value[] {
     const params = target.params;
     const values: Value[] = [];
-    for (let index = 0; index < args.length; index += 1) {
+
+    /*
+     * Iterating the parameters rather than the arguments is what makes a default
+     * argument work: a call that leaves one out gets the expression written in the
+     * declaration, evaluated here at the call site as C++ does.
+     */
+    const count = Math.max(args.length, params.length);
+    for (let index = 0; index < count; index += 1) {
       const argument = args[index];
-      if (!argument) continue;
       const param = params[index];
+
+      if (!argument && param?.defaultValue) {
+        const fallback = param.defaultValue;
+        if (param.type.reference) {
+          const referent = this.resolver.resolve(param.type).pointee ?? intType();
+          if (!this.isConstReference(param.type)) {
+            throw new RuntimeFault(
+              'a non-const reference cannot bind a temporary value',
+              fallback.start,
+            );
+          }
+          const temporary = this.allocateFor(referent);
+          this.store(referent, temporary, this.valueForType(referent, this.evaluateRaw(fallback)));
+          values.push({
+            kind: 'pointer',
+            type: { ...pointerTo(referent), name: `const ${referent.name} &` },
+            address: temporary,
+          });
+          continue;
+        }
+        const paramType = this.resolver.resolve(param.type);
+        values.push(this.valueForType(paramType, this.evaluateRaw(fallback)));
+        continue;
+      }
+
+      if (!argument) {
+        if (params.length > args.length && index >= args.length) {
+          // Fewer arguments than parameters, with no default to fill the gap: that is
+          // a mistake in the call, and C++ refuses it too.
+          throw new RuntimeFault(
+            `too few arguments for '${target.name}': expected ${params.length}`,
+            target.start,
+          );
+        }
+        continue;
+      }
 
       /*
        * A reference parameter is bound to the caller's object, not to a copy - so what

@@ -346,6 +346,49 @@ export const CORPUS: readonly ConformanceCase[] = [
   // ------------------------------------------------- gaps: the fast engine must not
   // produce a *different* answer; refusing is honest, guessing is not.
   {
+    name: 'constructor with arguments and a destructor',
+    file: 'main.cpp',
+    support: 'fast',
+    expect: 'start 5\ndone\n',
+    code: [
+      '#include <iostream>',
+      '',
+      'class Tracer {',
+      'public:',
+      '    int value;',
+      '    Tracer(int start) { value = start; std::cout << "start " << value << "\\n"; }',
+      '    ~Tracer() { std::cout << "done\\n"; }',
+      '};',
+      '',
+      'int main() {',
+      '    Tracer tracer{5};',
+      '    return 0;',
+      '}',
+    ].join('\n'),
+  },
+  {
+    name: 'destructors run in reverse order at scope exit',
+    file: 'main.cpp',
+    support: 'fast',
+    expect: 'inner\nouter\n',
+    code: [
+      '#include <iostream>',
+      '',
+      'struct Noisy {',
+      '    const char* name;',
+      '    ~Noisy() { std::cout << name << "\\n"; }',
+      '};',
+      '',
+      'int main() {',
+      '    Noisy outer{"outer"};',
+      '    {',
+      '        Noisy inner{"inner"};',
+      '    }',
+      '    return 0;',
+      '}',
+    ].join('\n'),
+  },
+  {
     name: 'namespace with a variable, a nested namespace and using',
     file: 'main.cpp',
     support: 'fast',
@@ -529,8 +572,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'class with a constructor',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'constructors: a method runs automatically, and `Counter() { ... }` names a member',
+    support: 'fast',
     expect: '3\n',
     code: [
       '#include <iostream>',
@@ -553,8 +595,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'operator overloading',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'operator functions',
+    support: 'fast',
     expect: '7\n',
     code: [
       '#include <iostream>',
@@ -615,8 +656,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'default argument',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'default arguments on a function',
+    support: 'fast',
     expect: '3 8\n',
     code: [
       '#include <iostream>',

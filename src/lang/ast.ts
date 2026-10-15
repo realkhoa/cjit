@@ -42,6 +42,11 @@ export interface TypeRef extends Node {
 export interface ParamDecl extends Node {
   readonly name?: string;
   readonly type: TypeRef;
+  /**
+   * `int add(int a, int b = 5)`: what to use when the caller leaves this out. C++
+   * evaluates it at the call site, which is what the engine does too.
+   */
+  readonly defaultValue?: Expression;
 }
 
 export interface MemberDecl extends Node {
@@ -60,6 +65,10 @@ export interface MethodDecl extends Node {
   readonly params: readonly ParamDecl[];
   readonly body?: CompoundStmt;
   readonly access?: Access;
+  /** `Counter(...)`: runs when an object is created, and has no return type. */
+  readonly isConstructor?: boolean;
+  /** `~Counter()`: runs when a local object goes out of scope. */
+  readonly isDestructor?: boolean;
   /** `static` methods have no `this`; kept so the message can say so. */
   readonly isStatic?: boolean;
   readonly isConst?: boolean;
