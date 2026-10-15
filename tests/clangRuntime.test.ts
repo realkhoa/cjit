@@ -314,3 +314,50 @@ describe.skipIf(!toolchainPresent)('clang runtime: several workspace files', () 
     180_000,
   );
 });
+
+/**
+ * Reading artifacts back out of the compiler's filesystem, which is what the
+ * download buttons hand to the browser.
+ */
+describe.skipIf(!toolchainPresent)('clang runtime: build artifacts', () => {
+  const PROGRAM = [
+    '#include <iostream>',
+    'int main() {',
+    '    std::cout << "artifact test\\n";',
+    '    return 0;',
+    '}',
+  ].join('\n');
+
+  it(
+    'hands back the linked wasm and the object file of a translation unit',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      await runtime.build({ fileName: 'main.cpp', code: PROGRAM });
+
+      const wasm = runtime.readArtifact('main.cpp', 'wasm');
+      expect(wasm).not.toBeNull();
+      expect(wasm?.byteLength ?? 0).toBeGreaterThan(10_000);
+      // A wasm module starts with the magic number; that is what proves this is
+      // the linked binary and not some leftover buffer.
+      expect([...(wasm?.slice(0, 4) ?? [])]).toEqual([0x00, 0x61, 0x73, 0x6d]);
+
+      const object = runtime.readArtifact('main.cpp', 'object');
+      expect(object).not.toBeNull();
+      expect(object?.byteLength ?? 0).toBeGreaterThan(100);
+    },
+    180_000,
+  );
+
+  it(
+    'returns null for something that was never built',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      await runtime.build({ fileName: 'main.cpp', code: PROGRAM });
+
+      // A header is never compiled on its own, so there is no object file for it.
+      expect(runtime.readArtifact('util.h', 'object')).toBeNull();
+      expect(runtime.readArtifact('other.cpp', 'wasm')).toBeNull();
+    },
+    180_000,
+  );
+});

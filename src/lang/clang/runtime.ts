@@ -170,6 +170,14 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
   let api: ClangApiInstance | null = null;
   let output = '';
   let phase: BuildPhase = 'build';
+  /**
+   * Artifacts the last build actually produced.
+   *
+   * Asking the filesystem for a path that does not exist does not return nothing:
+   * `memfs` traps with `unreachable`, which would look like a crash. Remembering
+   * what was written is both cheaper and honest.
+   */
+  let produced = new Set<string>();
 
   const write = (text: string): void => {
     output += text;
@@ -238,6 +246,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
     // Tracked so a failure is reported against the step that actually failed: a
     // clang crash while compiling used to be reported as a runtime error.
     let stage: BuildStage = 'compile';
+    produced = new Set<string>();
     try {
       // Every workspace file goes into the compiler's filesystem: that is what
       // makes `#include "util.h"` resolve to the file the user actually wrote.
@@ -266,6 +275,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
           unit.path,
         );
         objects.push(object);
+        produced.add(object);
       }
 
       stage = 'link';
@@ -297,6 +307,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
           failure: 'the linker produced no output',
         };
       }
+      produced.add(wasm);
 
       if (request.stdin && request.stdin.length > 0) {
         instance.memfs.stdinStr = request.stdin;
@@ -333,11 +344,19 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
   }
 
   function readArtifact(sourcePath: string, kind: ArtifactKind): Uint8Array | null {
-    const contents = api?.memfs.getFileContents(artifactPath(sourcePath, kind));
-    if (!contents || contents.byteLength === 0) return null;
-    // memfs hands back a view over the compiler's memory, which is reused by the
-    // next build: copy before returning it.
-    return new Uint8Array(contents);
+    const path = artifactPath(sourcePath, kind);
+    if (!produced.has(path)) return null;
+
+    try {
+      const contents = api?.memfs.getFileContents(path);
+      if (!contents || contents.byteLength === 0) return null;
+      // memfs hands back a view over the compiler's memory, which is reused by the
+      // next build: copy before returning it.
+      return new Uint8Array(contents);
+    } catch {
+      // Belt and braces: a filesystem that traps must not look like a crash.
+      return null;
+    }
   }
 
   return { ready, build, readArtifact };
