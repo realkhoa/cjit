@@ -112,9 +112,56 @@ describe('preprocessor: includes', () => {
     expect(warnings(result).some((item) => item.message.includes('unknown header'))).toBe(true);
   });
 
-  it('warns about a local include, which has no filesystem to resolve against', () => {
+  it('warns about a quoted include that is not in the workspace', () => {
     const result = pre('#include "local.h"\nint main(void) { return 0; }');
-    expect(warnings(result).some((item) => item.message.includes('local include'))).toBe(true);
+    // The warning names the file and says where includes may come from, instead of
+    // the old "not supported yet": quoted includes work now, this one just does not
+    // exist.
+    expect(warnings(result).some((item) => item.message.includes('cannot find "local.h"'))).toBe(
+      true,
+    );
+  });
+
+  it('splices a workspace file and attributes its tokens to its own path', () => {
+    const files = new Map([['util.h', 'int helper(int value);\n']]);
+    const result = pre('#include "util.h"\nint main(void) { return helper(1); }', { files });
+
+    expect(errors(result)).toEqual([]);
+    expect(find(result, 'helper')?.file).toBe('util.h');
+  });
+
+  it('resolves relative to the including file first', () => {
+    const files = new Map([
+      ['src/util.h', 'int fromSrc(void);\n'],
+      ['util.h', 'int fromRoot(void);\n'],
+    ]);
+    const result = preprocess('#include "util.h"\nint main(void) { return 0; }', 'src/main.c', {
+      files,
+    });
+
+    expect(find(result, 'fromSrc')?.file).toBe('src/util.h');
+    expect(find(result, 'fromRoot')).toBeUndefined();
+  });
+
+  it('includes a workspace file once, like a built-in header', () => {
+    const files = new Map([['util.h', 'int helper(int value);\n']]);
+    const result = pre('#include "util.h"\n#include "util.h"\nint main(void) { return 0; }', {
+      files,
+    });
+
+    expect(result.tokens.filter((token) => token.text === 'helper')).toHaveLength(1);
+  });
+
+  it('follows a chain of workspace headers', () => {
+    const files = new Map([
+      ['outer.h', '#include "inner.h"\nint outer(void);\n'],
+      ['inner.h', 'int inner(void);\n'],
+    ]);
+    const result = pre('#include "outer.h"\nint main(void) { return 0; }', { files });
+
+    expect(errors(result)).toEqual([]);
+    expect(find(result, 'inner')?.file).toBe('inner.h');
+    expect(find(result, 'outer')?.file).toBe('outer.h');
   });
 
   it('resolves a C++ header silently, and a <c...> wrapper to its C header', () => {

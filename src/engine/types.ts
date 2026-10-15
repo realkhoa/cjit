@@ -133,10 +133,23 @@ export interface RunSink {
   watch(snapshot: WatchSnapshot): void;
 }
 
-/** The code to process, plus the file label diagnostics must be reported against. */
+/** A file in the workspace, as the engines see it: plain, cloneable data. */
+export interface SourceFile {
+  readonly path: string;
+  readonly code: string;
+}
+
+/**
+ * The code to process, plus the file label diagnostics must be reported against.
+ *
+ * `files` is the rest of the workspace. Both engines use it the same way: a quoted
+ * `#include "util.h"` resolves to the workspace file with that name, and Run
+ * compiles and links every translation unit it contains.
+ */
 export interface SourceUnit {
   readonly code: string;
   readonly file: string;
+  readonly files?: readonly SourceFile[];
 }
 
 export interface Engine {

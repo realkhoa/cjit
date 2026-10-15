@@ -199,3 +199,118 @@ describe.skipIf(!toolchainPresent)('clang runtime: real toolchain', () => {
     180_000,
   );
 });
+
+/**
+ * Multi-file projects. The workspace lets people create several files, so Run has
+ * to compile them the way a desktop compiler would: quoted includes resolve to the
+ * files that exist, and every translation unit is compiled and linked together.
+ */
+describe.skipIf(!toolchainPresent)('clang runtime: several workspace files', () => {
+  const HEADER = [
+    '#ifndef UTIL_H',
+    '#define UTIL_H',
+    'int helper(int value);',
+    '#endif',
+  ].join('\n');
+
+  const UTIL = [
+    '#include "util.h"',
+    'int helper(int value) { return value * 3; }',
+  ].join('\n');
+
+  const MAIN = [
+    '#include <iostream>',
+    '#include "util.h"',
+    'int main() {',
+    '    std::cout << "helper(14) = " << helper(14) << \'\\n\';',
+    '    return 0;',
+    '}',
+  ].join('\n');
+
+  it(
+    'resolves a quoted include and links two translation units',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      const outcome = await runtime.build({
+        fileName: 'main.cpp',
+        code: MAIN,
+        files: [
+          { path: 'util.h', code: HEADER },
+          { path: 'util.cpp', code: UTIL },
+        ],
+      });
+
+      expect(outcome.stage).toBe('ok');
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.output).toContain('helper(14) = 42');
+    },
+    180_000,
+  );
+
+  it(
+    'handles files in a subdirectory',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      const outcome = await runtime.build({
+        fileName: 'src/main.cpp',
+        code: MAIN,
+        files: [
+          { path: 'src/util.h', code: HEADER },
+          { path: 'src/util.cpp', code: UTIL },
+        ],
+      });
+
+      expect(outcome.stage).toBe('ok');
+      expect(outcome.output).toContain('helper(14) = 42');
+    },
+    180_000,
+  );
+
+  it(
+    'compiles a C project split across files',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      const outcome = await runtime.build({
+        fileName: 'main.c',
+        code: [
+          '#include <stdio.h>',
+          '#include "maths.h"',
+          'int main(void) {',
+          '    printf("triple(7) = %d\\n", triple(7));',
+          '    return 0;',
+          '}',
+        ].join('\n'),
+        files: [
+          { path: 'maths.h', code: 'int triple(int value);\n' },
+          {
+            path: 'maths.c',
+            code: '#include "maths.h"\nint triple(int value) { return value * 3; }\n',
+          },
+        ],
+      });
+
+      expect(outcome.stage).toBe('ok');
+      expect(outcome.output).toContain('triple(7) = 21');
+    },
+    180_000,
+  );
+
+  it(
+    'is not fooled by a header that does not exist',
+    async () => {
+      const runtime = createClangRuntime({ files: localFiles });
+      const outcome = await runtime.build({
+        fileName: 'main.cpp',
+        code: '#include "nowhere.h"\nint main() { return 0; }\n',
+        files: [{ path: 'util.h', code: HEADER }],
+      });
+
+      expect(outcome.stage).not.toBe('ok');
+      const diagnostics = parseClangDiagnostics(outcome.output, 'main.cpp');
+      expect(
+        diagnostics.some((item) => item.severity === 'error' && item.message.includes('nowhere.h')),
+      ).toBe(true);
+    },
+    180_000,
+  );
+});

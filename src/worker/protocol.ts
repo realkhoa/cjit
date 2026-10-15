@@ -1,4 +1,4 @@
-import type { Diagnostic, RunOutcome, WatchSnapshot } from '@/engine/types';
+import type { Diagnostic, RunOutcome, SourceFile, WatchSnapshot } from '@/engine/types';
 
 /**
  * Main-thread <-> worker protocol.
@@ -10,11 +10,15 @@ import type { Diagnostic, RunOutcome, WatchSnapshot } from '@/engine/types';
  * cancelling means terminating it, not asking it to stop.
  */
 
+/** The rest of the workspace, so quoted includes resolve inside the worker too. */
+type WorkspaceFiles = readonly SourceFile[];
+
 export interface WatchRequest {
   readonly kind: 'watch';
   readonly requestId: number;
   readonly code: string;
   readonly file: string;
+  readonly files?: WorkspaceFiles;
 }
 
 export interface RunRequest {
@@ -23,6 +27,7 @@ export interface RunRequest {
   readonly code: string;
   readonly file: string;
   readonly stdin: string;
+  readonly files?: WorkspaceFiles;
 }
 
 export type WorkerRequest = WatchRequest | RunRequest;

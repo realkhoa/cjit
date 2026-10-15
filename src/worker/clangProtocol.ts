@@ -1,4 +1,4 @@
-import type { Diagnostic, RunOutcome } from '@/engine/types';
+import type { Diagnostic, RunOutcome, SourceFile } from '@/engine/types';
 
 /**
  * Main-thread <-> clang worker protocol.
@@ -16,6 +16,11 @@ export interface ClangRunRequest {
   readonly stdin: string;
   /** Absolute URL of the directory holding clang/lld/sysroot. */
   readonly toolchainBase: string;
+  /**
+   * The rest of the workspace: written into the compiler's filesystem so quoted
+   * includes resolve, and compiled + linked as further translation units.
+   */
+  readonly files?: readonly SourceFile[];
 }
 
 export type ClangRequest = ClangRunRequest;

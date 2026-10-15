@@ -157,6 +157,7 @@ export function createClangEngine(options: ClangEngineOptions = {}): Engine {
           fileName: source.file,
           stdin,
           toolchainBase,
+          ...(source.files ? { files: source.files } : {}),
         };
         current.postMessage(request);
       });

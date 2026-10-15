@@ -54,6 +54,15 @@ export interface PreprocessOptions {
   readonly maxIncludeDepth?: number;
   readonly maxExpansionDepth?: number;
   readonly maxOutputTokens?: number;
+  /**
+   * The rest of the workspace, keyed by path.
+   *
+   * `#include "util.h"` resolves against these the way a compiler resolves it: the
+   * directory of the including file first, then the include path - with the
+   * workspace root standing in for the include path. This is what makes a project
+   * split across several files work in the realtime pane.
+   */
+  readonly files?: ReadonlyMap<string, string>;
 }
 
 const DEFAULT_MAX_INCLUDE_DEPTH = 16;
@@ -262,12 +271,15 @@ class Preprocessor {
   private readonly maxExpansionDepth: number;
   private readonly maxOutputTokens: number;
   private readonly implicitHeaders: boolean;
+  /** Workspace files a quoted include may resolve to. */
+  private readonly files: ReadonlyMap<string, string>;
 
   constructor(source: string, file: string, options: PreprocessOptions) {
     this.maxIncludeDepth = options.maxIncludeDepth ?? DEFAULT_MAX_INCLUDE_DEPTH;
     this.maxExpansionDepth = options.maxExpansionDepth ?? DEFAULT_MAX_EXPANSION_DEPTH;
     this.maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     this.implicitHeaders = options.implicitHeaders !== false;
+    this.files = options.files ?? new Map<string, string>();
 
     this.sources.set(file, source);
 
@@ -607,9 +619,21 @@ class Preprocessor {
     }
 
     if (!systemStyle) {
+      // A file in the workspace: resolved the way a compiler resolves it, included
+      // once, with its tokens attributed to its own path so symbols, errors and
+      // go-to-definition all point at the file the user wrote.
+      const local = this.resolveLocalInclude(name, hash.file);
+      if (local) {
+        if (this.included.has(local.path)) return;
+        this.included.add(local.path);
+        this.includedOrder.push(local.path);
+        this.spliceWorkspaceFile(local.path, local.source, hash);
+        return;
+      }
+
       this.warn(
         hash,
-        `local include "${name}" is not supported yet; only built-in headers are available`,
+        `cannot find "${name}" in the workspace: only files of this workspace and the built-in headers can be included`,
       );
       return;
     }
@@ -649,6 +673,49 @@ class Preprocessor {
       return;
     }
     for (const token of this.lexHeader(name, source, depth)) this.pendingSplice.push(token);
+  }
+
+  /**
+   * Resolves a quoted include against the workspace.
+   *
+   * The search order is C's: the directory of the including file first, then the
+   * include path - the workspace root standing in for the include path.
+   */
+  private resolveLocalInclude(
+    name: string,
+    from: string,
+  ): { readonly path: string; readonly source: string } | null {
+    const cleaned = name.replace(/^\.\//, '');
+    const slash = from.lastIndexOf('/');
+    const directory = slash >= 0 ? from.slice(0, slash + 1) : '';
+
+    for (const candidate of [`${directory}${cleaned}`, cleaned]) {
+      const source = this.files.get(candidate);
+      if (source !== undefined) return { path: candidate, source };
+    }
+    return null;
+  }
+
+  /**
+   * Splices a workspace file in, attributing its tokens to its own path. Nested
+   * `#include`s inside it are processed by this same preprocessor, so a chain of
+   * workspace headers works.
+   */
+  private spliceWorkspaceFile(path: string, source: string, origin: Token): void {
+    const depth = origin.includeDepth + 1;
+    if (depth > this.maxIncludeDepth) {
+      this.warn(origin, `include nesting deeper than ${this.maxIncludeDepth} levels; ignored`);
+      return;
+    }
+
+    this.sources.set(path, source);
+    const lexed = lex(source, path);
+    for (const diagnostic of lexed.diagnostics) this.diagnostics.push(diagnostic);
+
+    for (const token of lexed.tokens) {
+      if (token.kind === 'eof') continue;
+      this.pendingSplice.push({ ...token, includeDepth: depth });
+    }
   }
 
   /** Lexes a virtual header and stamps its include depth. */

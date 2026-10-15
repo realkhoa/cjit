@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { DEFAULT_EXAMPLE } from '@/examples/sample';
 import { getEngine, isEngineWired } from '@/engine/registry';
-import type { EngineId, WatchSnapshot } from '@/engine/types';
+import type { EngineId, SourceFile, WatchSnapshot } from '@/engine/types';
 import { emptyWatch } from '@/engine/types';
 import { DebouncedAnalyzer } from '@/state/analyzeController';
 import {
@@ -189,6 +189,13 @@ function derived(
     language: file?.language ?? DEFAULT_EXAMPLE.language,
     code: file?.code ?? '',
   };
+}
+
+/** Turns the workspace files into what the preprocessor expects, if there are any. */
+function workspaceFiles(state: AppState): readonly SourceFile[] {
+  return state.files
+    .filter((file) => file.id !== state.activeFileId)
+    .map((file) => ({ path: file.path, code: file.code }));
 }
 
 const startFiles = initialFiles();
@@ -502,7 +509,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     try {
       const state = get();
       let outcome = await engine.run(
-        { code: state.code, file: state.path },
+        { code: state.code, file: state.path, files: workspaceFiles(state) },
         state.stdin,
         {
           stdout: (chunk) => get().appendOutput('stdout', chunk),
@@ -521,7 +528,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
           `> ${engine.id} (${engine.label}) không chạy được: ${outcome.detail} → chạy bằng ${fallback.id}`,
         );
         outcome = await fallback.run(
-          { code: state.code, file: state.path },
+          { code: state.code, file: state.path, files: workspaceFiles(state) },
           state.stdin,
           {
             stdout: (chunk) => get().appendOutput('stdout', chunk),
@@ -575,10 +582,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
 const analyzer = new DebouncedAnalyzer({
   delayMs: ANALYSIS_DEBOUNCE_MS,
   analyze: async (code, signal) => {
-    const { path } = useAppStore.getState();
+    const state = useAppStore.getState();
     const engine = getEngine(WATCH_ENGINE_ID);
     try {
-      const snapshot = await engine.watch({ code, file: path }, signal);
+      const snapshot = await engine.watch(
+        { code, file: state.path, files: workspaceFiles(state) },
+        signal,
+      );
       if (signal.aborted) return;
       useAppStore.setState({ watch: snapshot });
     } catch (error) {

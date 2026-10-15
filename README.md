@@ -121,6 +121,16 @@ lúc toolchain chưa nạp xong, Run tự fallback về fast engine và **nói r
 
 ### Workspace nhiều file, lưu trong browser
 
+**Các file trong workspace nhìn thấy nhau.** `#include "util.h"` resolve theo đúng cách compiler làm: **thư mục
+của file đang include trước**, rồi tới workspace root (đóng vai include path); include-once, đi theo được chuỗi
+header, và token của file được include mang **đúng path của nó** nên symbol/lỗi/go-to-definition đều trỏ về file
+bạn viết. Không tìm thấy thì báo đúng tên file chứ không nói chung chung.
+
+**Run biên dịch cả project**: mọi file trong workspace được ghi vào filesystem của compiler (có tạo thư mục cha —
+`memfs` không tự tạo, thiếu bước này clang trap `unreachable`), **mỗi translation unit được compile riêng rồi link
+chung** với nhau. Nên `main.cpp` + `util.h` + `util.cpp`, hay `src/main.cpp` + `src/util.h`, hay project C trộn,
+đều chạy như trên máy. Cả fast engine (pane Watch realtime) và clang đều dùng chung đường này.
+
 Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu vào `localStorage` và tự khôi phục khi mở lại:
 
 - **Tạo / mở / đổi tên / xoá file** (`＋`, bấm đôi để đổi tên, nút 🗑 hỏi xác nhận tại chỗ). Tên file được kiểm tra:
@@ -224,7 +234,8 @@ exception) chưa thực thi được; chưa có I/O file. Đây là ranh giới 
 
 Parser của fast engine cũng chưa nhận `std::vector<std::vector<int>>` viết liền (cần `> >`) và init list lồng
 nhau (`{{1, 2}, {3}}`) — **Run bằng clang thì nhận cả hai**. Pane Watch là để xem nhanh trong lúc gõ, nên ranh
-giới này được ghi ra thay vì che đi.
+giới này được ghi ra thay vì che đi. Quoted include thì **đã hỗ trợ**: file trong workspace được splice như header
+built-in (kèm include-once và giới hạn độ sâu lồng).
 
 **Một bug thật đã lộ ra khi làm phần hiển thị container**: `std::vector<std::string>` lưu phần tử dưới dạng
 **ký tự thô của literal** thay vì một string object, nên khi đọc lại thì 8 byte đầu của `"alpha"` bị hiểu là con

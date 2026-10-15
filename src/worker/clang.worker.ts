@@ -25,6 +25,7 @@ interface RuntimeLike {
     fileName: string;
     code: string;
     stdin?: string;
+    files?: readonly { readonly path: string; readonly code: string }[];
   }): Promise<{
     exitCode: number | null;
     stage: 'ok' | 'load' | 'compile' | 'link' | 'run';
@@ -114,6 +115,7 @@ async function handleRun(request: ClangRequest): Promise<void> {
       fileName: request.fileName,
       code: request.code,
       stdin: request.stdin,
+      ...(request.files ? { files: request.files } : {}),
     });
 
     const diagnostics = parseClangDiagnostics(outcome.output, request.fileName);

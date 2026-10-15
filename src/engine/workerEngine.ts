@@ -122,6 +122,7 @@ export function createWorkerEngine(options: WorkerEngineOptions = {}): Engine {
         requestId,
         code: source.code,
         file: source.file,
+        ...(source.files ? { files: source.files } : {}),
       };
       worker.postMessage(request);
     });
@@ -215,6 +216,7 @@ export function createWorkerEngine(options: WorkerEngineOptions = {}): Engine {
         code: source.code,
         file: source.file,
         stdin,
+        ...(source.files ? { files: source.files } : {}),
       };
       worker.postMessage(request);
     });

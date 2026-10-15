@@ -31,9 +31,58 @@ export interface ClangRuntimeOptions {
 export type BuildPhase = 'build' | 'run';
 
 export interface BuildRequest {
+  /** The file the user is editing: its diagnostics are the ones shown in place. */
   readonly fileName: string;
   readonly code: string;
   readonly stdin?: string;
+  /**
+   * The rest of the workspace. They are written into the compiler's filesystem so
+   * `#include "util.h"` resolves, and every translation unit among them is compiled
+   * and linked together - which is what makes a project split across files behave
+   * the way it does on a desktop.
+   */
+  readonly files?: readonly WorkspaceFile[];
+}
+
+export interface WorkspaceFile {
+  readonly path: string;
+  readonly code: string;
+}
+
+/** Extensions that are compiled into an object file (headers are not). */
+const TRANSLATION_UNIT_EXTENSIONS = ['.c', '.cc', '.cpp', '.cxx', '.c++'];
+
+export function isTranslationUnit(path: string): boolean {
+  const lower = path.toLowerCase();
+  return TRANSLATION_UNIT_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
+function languageOf(path: string): 'c' | 'c++' {
+  return path.toLowerCase().endsWith('.c') ? 'c' : 'c++';
+}
+
+/**
+ * Creates the parent directories of `filePath` in the compiler's filesystem.
+ *
+ * Without this, adding `src/util.h` makes clang trap with `unreachable`: the
+ * filesystem has no directories unless they are created explicitly. Each directory
+ * is created once per build.
+ */
+function ensureDirectories(memfs: MemFs, filePath: string, created: Set<string>): void {
+  const parts = filePath.split('/').filter((part) => part.length > 0);
+  parts.pop();
+
+  let prefix = '';
+  for (const part of parts) {
+    prefix = prefix.length > 0 ? `${prefix}/${part}` : part;
+    if (created.has(prefix)) continue;
+    created.add(prefix);
+    try {
+      memfs.addDirectory(prefix);
+    } catch {
+      // Already present (or rejected): writing the file reports the real problem.
+    }
+  }
 }
 
 export type BuildStage = 'ok' | 'load' | 'compile' | 'link' | 'run';
@@ -55,6 +104,8 @@ export interface ClangRuntime {
 
 interface MemFs {
   addFile(name: string, contents: string): void;
+  /** `memfs` has no implicit directories: parents must be created first. */
+  addDirectory(name: string): void;
   getFileContents(name: string): Uint8Array | null;
   stdinStr?: string;
   stdinStrPos?: number;
@@ -140,8 +191,6 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
       return { exitCode: null, stage: 'load', output, wasmBytes: 0, failure: 'toolchain not loaded' };
     }
 
-    const language = request.fileName.toLowerCase().endsWith('.c') ? 'c' : 'c++';
-    const object = `${request.fileName}.o`;
     const wasm = `${request.fileName}.wasm`;
 
     // Colour codes would end up as escape sequences in the console; the parser
@@ -150,27 +199,47 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
       (argument) => argument !== '-fcolor-diagnostics',
     );
 
+    // The active file first, so its diagnostics are the first ones reported.
+    const others = (request.files ?? []).filter((file) => file.path !== request.fileName);
+    const sources: WorkspaceFile[] = [{ path: request.fileName, code: request.code }, ...others];
+    const units = sources.filter((file) => isTranslationUnit(file.path));
+
     const consoleLog = console.log;
     console.log = () => undefined;
+    // Tracked so a failure is reported against the step that actually failed: a
+    // clang crash while compiling used to be reported as a runtime error.
+    let stage: BuildStage = 'compile';
     try {
-      instance.memfs.addFile(request.fileName, request.code);
+      // Every workspace file goes into the compiler's filesystem: that is what
+      // makes `#include "util.h"` resolve to the file the user actually wrote.
+      const created = new Set<string>();
+      for (const file of sources) {
+        ensureDirectories(instance.memfs, file.path, created);
+        instance.memfs.addFile(file.path, file.code);
+      }
 
       const clang = await instance.getModule('clang');
-      await instance.run(
-        clang,
-        'clang',
-        '-cc1',
-        '-emit-obj',
-        ...commonArgs,
-        '-fno-color-diagnostics',
-        '-O2',
-        '-o',
-        object,
-        '-x',
-        language,
-        request.fileName,
-      );
+      const objects: string[] = [];
+      for (const unit of units) {
+        const object = `${unit.path}.o`;
+        await instance.run(
+          clang,
+          'clang',
+          '-cc1',
+          '-emit-obj',
+          ...commonArgs,
+          '-fno-color-diagnostics',
+          '-O2',
+          '-o',
+          object,
+          '-x',
+          languageOf(unit.path),
+          unit.path,
+        );
+        objects.push(object);
+      }
 
+      stage = 'link';
       const lld = await instance.getModule('lld');
       await instance.run(
         lld,
@@ -180,7 +249,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
         `stack-size=${STACK_SIZE}`,
         '-Llib/wasm32-wasi',
         'lib/wasm32-wasi/crt1.o',
-        object,
+        ...objects,
         BUILTINS_ARCHIVE,
         '-lc',
         '-lc++',
@@ -208,6 +277,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
       const module = await WebAssembly.compile(toArrayBuffer(binary));
       // Everything after this point is the program talking, not the toolchain.
       phase = 'run';
+      stage = 'run';
       const stillRunning = await instance.run(module, wasm);
 
       return {
@@ -223,7 +293,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
       const exitCode = typeof code === 'number' ? code : null;
       return {
         exitCode,
-        stage: exitCode === null ? 'run' : 'compile',
+        stage,
         output,
         wasmBytes: 0,
         failure: error instanceof Error ? error.message : String(error),

@@ -23,7 +23,12 @@ export function handleWorkerRequest(
   const { requestId } = request;
 
   try {
-    const analysis = analyzeSource(request.code, request.file);
+    // The rest of the workspace, so a quoted include in the file being analysed
+    // finds the file the user actually wrote.
+    const files = new Map<string, string>(
+      (request.files ?? []).map((file) => [file.path, file.code]),
+    );
+    const analysis = analyzeSource(request.code, request.file, files.size > 0 ? { files } : {});
 
     if (analysis.errorCount > 0) {
       const snapshot = buildCompileErrorSnapshot(analysis);

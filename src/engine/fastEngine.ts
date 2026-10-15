@@ -2,6 +2,7 @@ import type {
   Engine,
   RunOutcome,
   RunSink,
+  SourceUnit,
   VarNode,
   WatchSnapshot,
   WatchStatus,
@@ -165,13 +166,19 @@ export function buildRunOutcome(analysis: AnalysisResult, result: ExecutionResul
   };
 }
 
+/** Turns the workspace files into what the preprocessor expects, if there are any. */
+function workspaceOptions(source: SourceUnit): { files?: ReadonlyMap<string, string> } {
+  if (!source.files || source.files.length === 0) return {};
+  return { files: new Map(source.files.map((file) => [file.path, file.code])) };
+}
+
 export function createFastEngine(): Engine {
   return {
     id: 'fast',
     label: 'Fast engine',
 
     async watch(source): Promise<WatchSnapshot> {
-      const analysis = analyzeSource(source.code, source.file);
+      const analysis = analyzeSource(source.code, source.file, workspaceOptions(source));
       // Completion/hover read the symbol table published for this snapshot.
       publishAnalysis(analysis);
 
@@ -182,7 +189,7 @@ export function createFastEngine(): Engine {
     },
 
     async run(source, stdin, sink: RunSink, signal): Promise<RunOutcome> {
-      const analysis = analyzeSource(source.code, source.file);
+      const analysis = analyzeSource(source.code, source.file, workspaceOptions(source));
       publishAnalysis(analysis);
 
       if (analysis.errorCount > 0) {
