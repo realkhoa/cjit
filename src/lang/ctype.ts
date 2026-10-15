@@ -690,12 +690,20 @@ export class TypeResolver {
           return vectorType(resolved);
       }
     }
-    const pairMatch = /^(?:std::)?pair\s*<(.+)>$/.exec(name);
-    if (pairMatch) {
+    const pairMatch = /^(?:std::)?pair\s*<(.+)>$/.exec(name);    if (pairMatch) {
       const args = splitTemplateArguments(pairMatch[1] ?? 'int, int');
       const first = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
       const second = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
       return pairType(first, second);
+    }
+
+    /*
+     * `std::function<int(int)>` is a callable held in a variable: eight bytes of closure,
+     * which is what a lambda is here too. The name is kept for the watch pane, and what
+     * it wraps is a call the engine makes itself.
+     */
+    if (/^(?:std::)?function\s*</.test(name)) {
+      return { kind: 'pointer', name, size: 8, signed: false, bits: 64, pointee: VOID_TYPE };
     }
 
     if (name === 'std::string' || name === 'string') return stringType();

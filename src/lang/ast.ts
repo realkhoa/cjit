@@ -162,6 +162,21 @@ export interface InitListExpr extends Node {
   readonly items: readonly Expression[];
 }
 
+/**
+ * `[capture](params) { body }`.
+ *
+ * A closure: what it captures is decided by the capture list, and the engine keeps a
+ * copy for a by-value capture and the address for a by-reference one, as C++ does.
+ */
+export interface LambdaExpr extends Node {
+  readonly kind: 'lambda';
+  readonly captures: readonly { readonly name: string; readonly byRef: boolean }[];
+  /** `[=]` or `[&]`: capture everything visible, by value or by reference. */
+  readonly captureAll?: 'value' | 'reference';
+  readonly params: readonly ParamDecl[];
+  readonly body: CompoundStmt;
+}
+
 export interface UnknownExpr extends Node {
   readonly kind: 'unknown';
   readonly text: string;
@@ -181,6 +196,7 @@ export type Expression =
   | CommaExpr
   | SizeofExpr
   | InitListExpr
+  | LambdaExpr
   | UnknownExpr;
 
 export interface VarDecl extends Node {

@@ -4,6 +4,7 @@ import type {
   Declaration,
   Expression,
   FunctionDeclNode,
+  LambdaExpr,
   Statement,
   StructDeclNode,
   TranslationUnit,
@@ -472,6 +473,22 @@ class Interpreter {
     readonly type: CType;
     readonly tag: string;
   }> = [];
+  /**
+   * Lambdas that have been created: what they run, and what they captured.
+   *
+   * The value is an address, so a closure can be stored in a variable, passed to a
+   * function and held by `std::function` - and this map is what turns that address back
+   * into code and captured state.
+   */
+  private readonly closures = new Map<
+    number,
+    {
+      readonly node: LambdaExpr;
+      readonly byValue: Map<string, Value>;
+      readonly byRef: Map<string, number>;
+    }
+  >();
+  private closureSeq = 0;
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -1512,6 +1529,8 @@ class Interpreter {
     switch (expression.kind) {
       case 'literal':
         return this.literalValue(expression);
+      case 'lambda':
+        return this.makeClosure(expression);
       case 'identifier':
         return this.loadIdentifier(expression.name, expression.start);
       case 'binary':
@@ -2330,12 +2349,42 @@ class Interpreter {
     const value = this.evaluate(callee);
     const address = toPointerAddress(value);
     if (value.kind === 'pointer' && address !== null && address > 0) {
+      // A lambda or a `std::function` holding one: the address is a closure.
+      const closure = this.closures.get(address);
+      if (closure) {
+        return this.callClosure(
+          closure,
+          this.evaluateArguments(expression.args, closure.node.params.length),
+        );
+      }
+
       const name = this.functionTable[address];
       const target = name ? this.functions.get(name) : undefined;
       if (target) return this.callFunction(target, this.callArguments(expression.args, target));
     }
 
     throw new RuntimeFault('call of a value that is not a function', expression.start);
+  }
+
+  /**
+   * Arguments for a closure, whose parameter list comes from the lambda itself.
+   *
+   * Separate from `callArguments` because a lambda has no `FunctionDeclNode` - and
+   * because a lambda parameter is always by value unless the lambda says otherwise.
+   */
+  private evaluateArguments(
+    args: readonly Expression[],
+    arity: number,
+  ): Value[] {
+    const values: Value[] = [];
+    for (let index = 0; index < Math.max(args.length, arity); index += 1) {
+      const argument = args[index];
+      if (!argument) {
+        throw new RuntimeFault(`too few arguments for the lambda: expected ${arity}`, this.unit.start);
+      }
+      values.push(this.evaluateRaw(argument));
+    }
+    return values;
   }
 
   private callArguments(args: readonly Expression[], target: FunctionDeclNode): Value[] {
@@ -2446,6 +2495,152 @@ class Interpreter {
   /** Evaluates without decaying arrays, so `sizeof`/`&` see the real thing. */
   private evaluateRaw(expression: Expression): Value {
     return this.evaluate(expression);
+  }
+
+  /**
+   * Builds a closure: the code, plus what the capture list says to keep.
+   *
+   * A by-value capture is a copy taken now, so a later change to the original is not
+   * seen - and a by-reference capture is the address, so it is. `[=]` and `[&]` capture
+   * everything visible, which behaves the same for the reads a lambda can make.
+   */
+  private makeClosure(expression: LambdaExpr): Value {
+    this.closureSeq += 1;
+    const address = this.memory.alloc(8, 8);
+    this.memory.writeInt64(address, this.closureSeq);
+
+    const byValue = new Map<string, Value>();
+    const byRef = new Map<string, number>();
+
+    const capture = (name: string, byReference: boolean): void => {
+      const binding = this.lookup(name);
+      if (!binding || byValue.has(name) || byRef.has(name)) return;
+
+      if (byReference) {
+        byRef.set(name, binding.address);
+        return;
+      }
+
+      const value = this.load(binding.type, binding.address, binding);
+      /*
+       * A by-value capture of an aggregate needs its own storage, or the "copy" and the
+       * original are the same object: capturing a `std::string` and then reassigning the
+       * original printed the new text, where C++ prints the text as it was.
+       */
+      if (value.kind === 'aggregate' && value.type.size > 0) {
+        const copy = this.memory.alloc(Math.max(value.type.size, 1), 8);
+        this.memory.copy(value.address, copy, Math.max(value.type.size, 1));
+        byValue.set(name, { ...value, address: copy });
+        return;
+      }
+
+      byValue.set(name, value);
+    };
+
+    if (expression.captureAll) {
+      const byReference = expression.captureAll === 'reference';
+      for (const scope of this.scopes) {
+        for (const name of [...scope.bindings.keys()]) capture(name, byReference);
+      }
+    }
+    for (const entry of expression.captures) capture(entry.name, entry.byRef);
+
+    this.closures.set(address, { node: expression, byValue, byRef });
+
+    return {
+      kind: 'pointer',
+      type: { kind: 'pointer', name: 'lambda', size: 8, signed: false, bits: 64, pointee: VOID_TYPE },
+      address,
+    };
+  }
+
+  /** Runs a closure: captures first, then the parameters, then the body. */
+  private callClosure(
+    closure: {
+      readonly node: LambdaExpr;
+      readonly byValue: Map<string, Value>;
+      readonly byRef: Map<string, number>;
+    },
+    args: readonly Value[],
+  ): Value {
+    const node = closure.node;
+    this.pushScope('lambda');
+    this.callStack.push({ name: 'lambda', position: node.start });
+    this.refreshStackSnapshot();
+
+    try {
+      for (const [name, value] of closure.byValue) {
+        const address = this.allocateFor(value.type);
+        this.store(value.type, address, value);
+        this.bind({
+          name,
+          type: value.type,
+          address,
+          storage: 'local',
+          scopeName: 'lambda',
+          declaredAt: node.start,
+        });
+      }
+      for (const [name, referent] of closure.byRef) {
+        /*
+         * The slot holds the referent's address, as a reference parameter's does - the
+         * read path dereferences the slot, not the binding's own address.
+         */
+        const referentType = this.typeOfBindingAt(referent);
+        const type: CType = {
+          ...pointerTo(referentType),
+          name: `${referentType.name} &`,
+        };
+        const slot = this.allocateFor(type);
+        this.memory.writeUint64(slot, referent);
+        this.bind({
+          name,
+          type,
+          address: slot,
+          storage: 'local',
+          scopeName: 'lambda',
+          declaredAt: node.start,
+          reference: true,
+        });
+      }
+
+      node.params.forEach((param, index) => {
+        if (param.name === undefined) return;
+        const type = this.resolver.resolve(param.type);
+        const address = this.allocateFor(type);
+        const argument = args[index] ?? intValue(intType(), 0);
+        this.store(type, address, this.valueForType(type, argument));
+        this.bind({
+          name: param.name,
+          type,
+          address,
+          storage: 'param',
+          scopeName: 'lambda',
+          declaredAt: param.start,
+        });
+      });
+
+      try {
+        this.executeStatement(node.body);
+      } catch (flow) {
+        if (flow instanceof ControlFlow && flow.flow === 'return') {
+          return flow.value ?? voidValue();
+        }
+        throw flow;
+      }
+      return voidValue();
+    } finally {
+      this.callStack.pop();
+      this.popScope();
+    }
+  }
+
+  /** The declared type of whatever lives at an address, for a by-reference capture. */
+  private typeOfBindingAt(address: number): CType {
+    for (const binding of this.allBindings) {
+      if (binding.address === address) return binding.type;
+    }
+    return UNKNOWN_TYPE;
   }
 
   private callFunction(

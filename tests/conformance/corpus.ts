@@ -346,6 +346,64 @@ export const CORPUS: readonly ConformanceCase[] = [
   // ------------------------------------------------- gaps: the fast engine must not
   // produce a *different* answer; refusing is honest, guessing is not.
   {
+    name: 'capture by value and by reference',
+    file: 'main.cpp',
+    support: 'fast',
+    // The by-value lambda keeps its copy: after the original becomes 99 it still sees 3.
+    expect: '10 3 99 10\n',
+    code: [
+      '#include <iostream>',
+      '',
+      'int main() {',
+      '    int counter = 3;',
+      '    auto byValue = [counter]() { return counter * 2 + 4; };',
+      '    auto byReference = [&counter]() { counter = 99; return counter; };',
+      '    std::cout << byValue() << " ";',
+      '    std::cout << counter << " ";',
+      '    byReference();',
+      '    std::cout << counter << " " << byValue() << "\\n";',
+      '    return 0;',
+      '}',
+    ].join('\n'),
+  },
+  {
+    name: 'capturing a std::string by value copies it',
+    file: 'main.cpp',
+    support: 'fast',
+    expect: 'hi khoa other\n',
+    code: [
+      '#include <iostream>',
+      '#include <string>',
+      '',
+      'int main() {',
+      '    std::string name = "khoa";',
+      '    auto greet = [name]() { std::cout << "hi " << name; };',
+      '    name = "other";',
+      '    greet();',
+      '    std::cout << " " << name << "\\n";',
+      '    return 0;',
+      '}',
+    ].join('\n'),
+  },
+  {
+    name: 'a lambda passed to a function and called twice',
+    file: 'main.cpp',
+    support: 'fast',
+    expect: '7 21\n',
+    code: [
+      '#include <iostream>',
+      '',
+      'int apply(int (*operation)(int), int value) { return operation(value); }',
+      '',
+      'int main() {',
+      '    auto triple = [](int value) { return value * 3; };',
+      '    std::cout << apply(triple, 2) + 1 << " ";',
+      '    std::cout << apply(triple, 7) << "\\n";',
+      '    return 0;',
+      '}',
+    ].join('\n'),
+  },
+  {
     name: 'constructor with arguments and a destructor',
     file: 'main.cpp',
     support: 'fast',
@@ -621,8 +679,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'lambda',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'lambda expressions and std::function',
+    support: 'fast',
     expect: '8\n',
     code: [
       '#include <iostream>',
@@ -767,8 +824,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'std::function held in a variable',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'std::function and callable values',
+    support: 'fast',
     expect: '12\n',
     code: [
       '#include <iostream>',

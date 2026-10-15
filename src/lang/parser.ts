@@ -7,6 +7,7 @@ import type {
   Expression,
   FunctionDeclNode,
   InitListExpr,
+  LambdaExpr,
   MemberDecl,
   MethodDecl,
   ParamDecl,
@@ -1797,6 +1798,12 @@ class Parser {
 
     if (this.check('{')) return this.parseInitList();
 
+    // `[](int value) { return value * 2; }` - a capture list starts a lambda.
+    if (this.check('[')) {
+      const lambda = this.parseLambda();
+      if (lambda) return lambda;
+    }
+
     this.error(token, `unexpected token "${token.text}" in expression`);
     this.advance();
     return { kind: 'unknown', text: token.text, start: token.start, end: token.end };
@@ -1967,6 +1974,69 @@ class Parser {
    * wrong way round. The first two become a `using` declaration the interpreter reads;
    * the third is an ordinary typedef under another spelling.
    */
+  /** `[capture](params) { body }`. */
+  private parseLambda(): LambdaExpr | undefined {
+    const open = this.advance();
+    const captures: { name: string; byRef: boolean }[] = [];
+    let captureAll: 'value' | 'reference' | undefined;
+
+    while (!this.atEnd() && !this.check(']')) {
+      if (this.check('=')) {
+        captureAll = 'value';
+        this.advance();
+      } else if (this.check('&')) {
+        this.advance();
+        if (this.isNameToken(this.peek())) captures.push({ name: this.advance().text, byRef: true });
+        else captureAll = 'reference';
+      } else if (this.check('this')) {
+        this.advance();
+        captures.push({ name: 'this', byRef: true });
+      } else if (this.isNameToken(this.peek())) {
+        captures.push({ name: this.advance().text, byRef: false });
+      } else {
+        break;
+      }
+      if (this.check(',')) this.advance();
+    }
+
+    if (!this.check(']')) {
+      this.error(open, "expected ']' to close the capture list");
+      return undefined;
+    }
+    this.advance();
+
+    // `mutable`, `noexcept` and a trailing return type carry nothing this engine needs.
+    while (this.check('mutable') || this.check('noexcept')) this.advance();
+    if (this.check('-') && this.tokenAt(this.index + 1)?.text === '>') {
+      this.advance();
+      this.advance();
+      this.parseTypeName();
+    }
+
+    if (!this.check('(')) {
+      this.error(this.peek(), "expected '(' after the capture list");
+      return undefined;
+    }
+    this.advance();
+    const parsed = this.parseParameterList();
+
+    if (!this.check('{')) {
+      this.error(this.peek(), 'a lambda must have a body');
+      return undefined;
+    }
+    const body = this.parseCompound();
+
+    return {
+      kind: 'lambda',
+      captures,
+      ...(captureAll ? { captureAll } : {}),
+      params: parsed.params,
+      body,
+      start: open.start,
+      end: body.end,
+    };
+  }
+
   private parseUsing(): Declaration[] {
     const usingToken = this.advance();
 
