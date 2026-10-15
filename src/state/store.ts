@@ -47,6 +47,12 @@ import {
 } from '@/state/share';
 import { formatBytes, saveBytes } from '@/util/download';
 import {
+  backupFileName,
+  mergeBackup,
+  parseWorkspaceJson,
+  workspaceToJson,
+} from '@/state/workspaceBackup';
+import {
   DEFAULT_BOTTOM_PERCENT,
   DEFAULT_EXPLORER_WIDTH,
   DEFAULT_RIGHT_PERCENT,
@@ -170,6 +176,12 @@ export interface AppState {
   /** Brings a trashed file back under a free name. */
   restoreTrashed(id: string): void;
   emptyTrash(): void;
+  /** Writes the whole workspace out as a file, for keeping outside the browser. */
+  exportWorkspace(): void;
+  /** Adds a backup's files to the workspace; never replaces what is here. */
+  importWorkspace(
+    text: string,
+  ): { ok: boolean; added?: number; skipped?: number; error?: string };
   resetWorkspace(): void;
   shareLink(): Promise<{ ok: boolean; url?: string; error?: string }>;
   /** Loads a workspace out of the URL fragment; true when one was found. */
@@ -401,6 +413,54 @@ export const useAppStore = create<AppState>()((set, get) => ({
   emptyTrash() {
     // The only action that really destroys anything, and it says so first.
     set({ trash: [] });
+  },
+
+  exportWorkspace() {
+    const { files, trash } = get();
+    const name = backupFileName();
+    const saved = saveBytes(name, new TextEncoder().encode(workspaceToJson(files, trash)));
+
+    get().appendOutput(
+      'system',
+      saved
+        ? `> Đã tải bản sao lưu ${name} (${files.length} file) — giữ file này ở đâu đó ngoài browser`
+        : '> Không tạo được file sao lưu trong môi trường này',
+    );
+  },
+
+  importWorkspace(text) {
+    const parsed = parseWorkspaceJson(text);
+    if (!parsed.ok) {
+      get().appendOutput('stderr', `> Nhập backup thất bại: ${parsed.error}`);
+      return { ok: false, error: parsed.error };
+    }
+
+    // Added to the workspace, never swapped in for it.
+    const existing = get().files;
+    const incoming = mergeBackup(
+      parsed.backup,
+      (index) => `imported-${Date.now().toString(36)}-${index}`,
+      (path) => uniquePath([...existing, ...get().files.filter((file) => file.id.startsWith('imported-'))], path),
+    );
+
+    const merged = [...existing, ...incoming];
+    const first = incoming[0];
+    set((state) => ({
+      files: merged,
+      activeFileId: first?.id ?? state.activeFileId,
+      ...derived(merged, first?.id ?? state.activeFileId),
+      codeRevision: state.codeRevision + 1,
+      output: [
+        line(
+          'system',
+          `> Đã nhập ${incoming.length} file từ backup (giữ nguyên ${existing.length} file đang có)` +
+            (parsed.backup.skipped > 0 ? ` · bỏ qua ${parsed.backup.skipped} mục không hợp lệ` : ''),
+        ),
+      ],
+      consoleTab: 'output',
+    }));
+    analyzer.schedule(get().code);
+    return { ok: true, added: incoming.length, skipped: parsed.backup.skipped };
   },
 
   resetWorkspace() {

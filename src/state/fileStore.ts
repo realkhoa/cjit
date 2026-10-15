@@ -150,6 +150,10 @@ export function extensionOf(path: string): string {
 }
 
 export function languageForPath(path: string): FileLanguage {
+  // `.C` is the long-standing Unix spelling of C++ (gcc and clang compile it as
+  // C++), so the case is checked before the lower-cased lookup.
+  const dot = path.lastIndexOf('.');
+  if (dot >= 0 && path.slice(dot + 1) === 'C') return 'cpp';
   return LANGUAGE_BY_EXTENSION.get(extensionOf(path)) ?? 'cpp';
 }
 

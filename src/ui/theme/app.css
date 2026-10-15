@@ -558,6 +558,18 @@ button {
   font-size: 11px;
 }
 
+/* Keeps a real input reachable while the styled label is what the user sees. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* A save failure has to be impossible to miss: the app works while losing work. */
 .statusbar__warning {
   padding: 0 6px;

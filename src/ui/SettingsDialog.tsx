@@ -13,9 +13,13 @@ export function SettingsDialog({ onClose }: { readonly onClose: () => void }) {
   const toggleMinimap = useAppStore((state) => state.toggleMinimap);
   const toggleInlineValues = useAppStore((state) => state.toggleInlineValues);
   const resetWorkspace = useAppStore((state) => state.resetWorkspace);
+  const exportWorkspace = useAppStore((state) => state.exportWorkspace);
+  const importWorkspace = useAppStore((state) => state.importWorkspace);
+  const trash = useAppStore((state) => state.trash);
   const files = useAppStore((state) => state.files);
 
   const [confirmReset, setConfirmReset] = useState(false);
+  const [importNote, setImportNote] = useState<string | null>(null);
 
   return (
     <div
@@ -97,8 +101,55 @@ export function SettingsDialog({ onClose }: { readonly onClose: () => void }) {
                 <button type="button" className="btn" onClick={() => setConfirmReset(true)}>
                   Reset workspace…
                 </button>
+                <span className="setting__hint">
+                  {trash.length > 0
+                    ? `${trash.length} file cũ vẫn nằm trong Trash sau khi reset`
+                    : 'Reset cũng đưa file cũ vào Trash, không xoá thẳng'}
+                </span>
               </span>
             )}
+          </div>
+
+          {/*
+            A copy outside the browser. The trash cannot help if the browser drops
+            its storage, and this is the only thing that can.
+          */}
+          <div className="setting setting--stacked">
+            <span className="setting__label">Sao lưu / phục hồi</span>
+            <span className="setting__hint">
+              Tải toàn bộ workspace thành một file JSON để giữ ngoài browser. Nhập lại thì file được
+              <strong> thêm vào</strong> workspace hiện tại, không thay thế.
+            </span>
+            <span className="setting__actions">
+              <button type="button" className="btn" onClick={exportWorkspace}>
+                ⬇ Export workspace…
+              </button>
+              <label className="btn" htmlFor="workspace-import">
+                ⬆ Import backup…
+              </label>
+              <input
+                id="workspace-import"
+                className="visually-hidden"
+                type="file"
+                accept=".json,application/json"
+                aria-label="Import workspace backup"
+                onChange={(event) => {
+                  const chosen = event.target.files?.[0];
+                  if (!chosen) return;
+                  void chosen.text().then((text) => {
+                    const result = importWorkspace(text);
+                    setImportNote(
+                      result.ok
+                        ? `Đã thêm ${result.added} file${result.skipped ? `, bỏ qua ${result.skipped} mục` : ''}`
+                        : `Không nhập được: ${result.error}`,
+                    );
+                  });
+                  // Allow choosing the same file again later.
+                  event.target.value = '';
+                }}
+              />
+            </span>
+            {importNote ? <span className="setting__hint">{importNote}</span> : null}
           </div>
         </div>
 
