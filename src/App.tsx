@@ -1,7 +1,10 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { ConsolePanel } from '@/ui/ConsolePanel';
 import { EditorPane } from '@/ui/EditorPane';
 import { Explorer } from '@/ui/Explorer';
+import { MobileAccessoryBar } from '@/ui/MobileAccessoryBar';
+import { MobileHeader } from '@/ui/MobileHeader';
+import { MobileMenu } from '@/ui/MobileMenu';
 import { MobileTabs } from '@/ui/MobileTabs';
 import { Splitter } from '@/ui/Splitter';
 import { StatusBar } from '@/ui/StatusBar';
@@ -33,6 +36,7 @@ export function App() {
   const setBottomPercent = useAppStore((state) => state.setBottomPercent);
   const setExplorerWidth = useAppStore((state) => state.setExplorerWidth);
   const isMobile = useIsMobile();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // Playback is driven from the shell, so it keeps running whichever pane is shown.
   useTimelinePlayback();
 
@@ -71,14 +75,12 @@ export function App() {
     [setExplorerWidth],
   );
 
-  // Narrow layout: one pane at a time, chosen with the tab bar. Every pane stays
-  // mounted and the inactive ones are hidden with CSS, so the editor keeps its
-  // undo history and scroll position while you look at something else.
+  // Narrow layout: dedicated touch-first mobile shell with compact MobileHeader,
+  // C++ quick accessory bar under the editor, modern bottom tabs, and overflow sheet.
   if (isMobile) {
     return (
       <div className="app" data-layout="mobile">
-        <TitleBar />
-        <Toolbar />
+        <MobileHeader onOpenMenu={() => setMobileMenuOpen(true)} />
 
         <main className="workspace workspace--mobile">
           <aside className="pane" data-pane="files" data-active={mobilePane === 'files'}>
@@ -90,6 +92,7 @@ export function App() {
             data-active={mobilePane === 'code'}
           >
             <EditorPane />
+            <MobileAccessoryBar />
           </div>
           <div className="pane" data-pane="watch" data-active={mobilePane === 'watch'}>
             <WatchPane />
@@ -100,7 +103,8 @@ export function App() {
         </main>
 
         <MobileTabs />
-        <StatusBar />
+
+        {mobileMenuOpen && <MobileMenu onClose={() => setMobileMenuOpen(false)} />}
       </div>
     );
   }
