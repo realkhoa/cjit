@@ -588,6 +588,17 @@ export class TypeResolver {
     const direct = SCALAR_BY_NAME.get(name);
     if (direct) return direct;
 
+    /*
+     * A tag used without the `struct` keyword: `shapes::Point p;` rather than
+     * `struct shapes::Point p;`. Both spellings name the same type, so the tagged
+     * registrations are tried before giving up - a namespaced struct otherwise resolved
+     * to an opaque type and its members became unreachable.
+     */
+    for (const prefix of ['struct ', 'union ', 'enum ']) {
+      const tagged = this.tags.get(`${prefix}${name}`) ?? this.enums.get(`${prefix}${name}`);
+      if (tagged) return tagged;
+    }
+
     const alias = SCALAR_ALIASES.get(name);
     if (alias) {
       const aliased = SCALAR_BY_NAME.get(alias);

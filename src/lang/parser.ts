@@ -91,6 +91,30 @@ export function parse(tokens: readonly Token[], file: string): ParseResult {
   return new Parser(tokens, file).parseTranslationUnit();
 }
 
+/**
+ * The same declaration under a namespace: `square` becomes `math::square`.
+ *
+ * The engine keeps one flat table of globals, so spelling the namespace out is what
+ * makes `math::square(5)` work - and it is the name the caller wrote, rather than a
+ * guess about which `square` was meant.
+ */
+function qualifyDeclaration(declaration: Declaration, prefix: string): Declaration {
+  switch (declaration.kind) {
+    case 'function':
+    case 'variable':
+    case 'typedef':
+      return { ...declaration, name: `${prefix}${declaration.name}` };
+    case 'struct':
+      return declaration.tag ? { ...declaration, tag: `${prefix}${declaration.tag}` } : declaration;
+    case 'enum':
+      return declaration.tag ? { ...declaration, tag: `${prefix}${declaration.tag}` } : declaration;
+    default:
+      // A `using` inside a namespace means something different there, and a skipped
+      // declaration has nothing to qualify.
+      return declaration;
+  }
+}
+
 class Parser {
   private index = 0;
   private readonly diagnostics: Diagnostic[] = [];
@@ -495,7 +519,21 @@ class Parser {
   private parseStructSpecifier(isUnion: boolean): Declaration | undefined {
     const keyword = this.advance();
     let tag: string | undefined;
-    if (this.isNameToken(this.peek())) tag = this.advance().text;
+    if (this.isNameToken(this.peek())) {
+      /*
+       * `struct shapes::Point p;` - the elaborated spelling with a qualified tag. It is
+       * the same type as `shapes::Point`, so the tag is read as the whole chain rather
+       * than stopping at the first name.
+       */
+      tag = this.advance().text;
+      while (this.check('::')) {
+        this.advance();
+        const part = this.peek();
+        if (!this.isNameToken(part)) break;
+        tag += `::${part.text}`;
+        this.advance();
+      }
+    }
 
     const members: MemberDecl[] = [];
     let isDefinition = false;
@@ -852,6 +890,18 @@ class Parser {
     // follows. This must happen before the "unsupported construct" check, which
     // would otherwise skip the whole template as a C++-only feature.
     this.parseTemplateHeader();
+
+    /*
+     * `namespace math { ... }`. The engine has one flat global table, so a namespace
+     * is spelled out instead: everything inside is declared under its qualified name
+     * (`math::square`), which is exactly how it is called, and a bare name only
+     * resolves after `using namespace math;`. That keeps the call site honest - the
+     * name the user wrote is the name that exists.
+     */
+    if (this.check('namespace')) {
+      const opened = this.parseNamespaceBlock();
+      if (opened) return opened;
+    }
 
     /*
      * `using` is handled before the unsupported-construct check, which would
@@ -1674,6 +1724,78 @@ class Parser {
         depth -= 1;
         if (depth <= 0) return;
       } else if (token.text === ';' || token.text === '{') return;
+    }
+  }
+
+  /**
+   * `namespace name { ... }`, `namespace a::b { ... }` and `namespace { ... }`.
+   *
+   * Returns the inner declarations with their names qualified, or undefined when this
+   * is not a namespace definition (`namespace alias = other;`, `namespace;`).
+   */
+  private parseNamespaceBlock(): Declaration[] | undefined {
+    this.advance();
+    if (this.check('inline')) this.advance();
+
+    const parts: string[] = [];
+    while (this.isNameToken(this.peek()) && !this.check('{') && !this.check(';')) {
+      let text = this.advance().text;
+      while (this.check('::')) {
+        this.advance();
+        const part = this.peek();
+        if (!this.isNameToken(part)) break;
+        text += `::${part.text}`;
+        this.advance();
+      }
+      parts.push(text);
+      if (this.check('::')) this.advance();
+    }
+
+    // `namespace alias = other;`: nothing to declare here.
+    if (this.check('=')) {
+      this.skipToStatementEnd();
+      return [];
+    }
+
+    if (!this.check('{')) {
+      // `namespace math;` declares nothing this engine needs.
+      this.consumeOptionalSemicolon();
+      return [];
+    }
+
+    // An anonymous namespace puts its names in the enclosing scope.
+    const prefix = parts.length > 0 ? `${parts.join('::')}::` : '';
+    this.advance();
+    const declarations: Declaration[] = [];
+    while (!this.atEnd() && !this.check('}')) {
+      const before = this.index;
+      for (const declaration of this.parseDeclarationList()) {
+        declarations.push(prefix.length > 0 ? qualifyDeclaration(declaration, prefix) : declaration);
+      }
+      if (this.index === before) this.advance();
+    }
+    this.expect('}', "expected '}' to close the namespace");
+
+    // The qualified tag and alias names have to be known to the resolver, exactly as
+    // if they had been declared at file scope under that name.
+    for (const declaration of declarations) this.registerQualifiedNames(declaration);
+    return declarations;
+  }
+
+  /** Makes the qualified spellings usable in later declarations. */
+  private registerQualifiedNames(declaration: Declaration): void {
+    switch (declaration.kind) {
+      case 'typedef':
+        this.typedefs.add(declaration.name);
+        return;
+      case 'struct':
+        if (declaration.tag) this.tags.add(`struct ${declaration.tag}`);
+        return;
+      case 'enum':
+        if (declaration.tag) this.tags.add(`enum ${declaration.tag}`);
+        return;
+      default:
+        return;
     }
   }
 

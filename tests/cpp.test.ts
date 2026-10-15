@@ -203,11 +203,19 @@ describe('C++ resolution: what still needs clang', () => {
     expect(warnings[0]?.message).toContain('class');
   });
 
-  it('says so for a namespace', () => {
-    const analysis = analyse('namespace app { int run(); }\nint main() { return 0; }');
+  it('runs a namespace now, and calls into it by its qualified name', () => {
+    const result = run(
+      [
+        '#include <iostream>',
+        'namespace app {',
+        'int run() { return 7; }',
+        '}',
+        'int main() { std::cout << app::run() << "\\n"; return 0; }',
+      ].join('\n'),
+    );
 
-    expect(analysis.errorCount).toBe(0);
-    expect(analysis.diagnostics.some((item) => item.message.includes('namespace'))).toBe(true);
+    expect(result.status, result.detail).toBe('ok');
+    expect(result.stdout).toBe('7\n');
   });
 
   it('does not warn about templates, containers or streams any more', () => {

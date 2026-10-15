@@ -413,7 +413,7 @@ describe('parser: C++ degradation is honest, not noisy', () => {
     expect(fn?.params[0]?.name).toBe('value');
   });
 
-  it('skips a class and a namespace, and only those', () => {
+  it('skips a class, and reads a namespace without skipping it', () => {
     const result = parseSource(
       [
         'class Widget { public: int size; };',
@@ -424,8 +424,11 @@ describe('parser: C++ degradation is honest, not noisy', () => {
 
     expect(errors(result)).toEqual([]);
     const skipped = result.unit.declarations.filter((item) => item.kind === 'unknown-decl');
-    expect(skipped).toHaveLength(2);
-    expect(functions(result).map((fn) => fn.name)).toEqual(['main']);
+    // The namespace is no longer skipped: its declarations are emitted under their
+    // qualified names, which is how they are called.
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]?.kind === 'unknown-decl' && skipped[0].text).toBe('class');
+    expect(functions(result).map((fn) => fn.name)).toEqual(['app::run', 'main']);
   });
 
   it('parses std::vector declarations instead of skipping them', () => {

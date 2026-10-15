@@ -449,6 +449,10 @@ class Interpreter {
   private stdNamespaceImported = false;
   /** Bare names from `using std::cout;` and friends. */
   private readonly importedNames = new Set<string>();
+  /** Namespaces brought in with `using namespace X;`, applied once everything exists. */
+  private readonly importedNamespaces = new Set<string>();
+  /** Qualified names imported one at a time, kept for diagnostics. */
+  private readonly importedFrom = new Set<string>();
   /** First signature seen for each function name, to spot an overload. */
   private readonly functionSignatures = new Map<string, string>();
   /** Names defined more than once with different parameters: a call must refuse. */
@@ -698,6 +702,9 @@ class Interpreter {
     for (const declaration of this.unit.declarations) {
       if (declaration.kind === 'variable') this.declareVariable(declaration, 'global', 'global');
     }
+
+    // Last, because it adds the bare spelling of names that now exist.
+    this.applyNamespaceImports();
   }
 
   private prepareTypes(declarations: readonly Declaration[]): void {
@@ -1304,6 +1311,13 @@ class Interpreter {
     switch (declaration.kind) {
       case 'using':
         this.applyUsing(declaration);
+        /*
+         * A `using namespace X;` inside a function is applied while that function runs,
+         * by which time the file-scope pass has already been and gone - so the aliases
+         * are added here too. The pass skips names that already exist, so repeating it
+         * costs nothing.
+         */
+        this.applyNamespaceImports();
         return;
       case 'variable':
         this.declareVariable(declaration, 'local', this.currentScopeName());
@@ -1344,11 +1358,52 @@ class Interpreter {
   private applyUsing(declaration: Extract<Declaration, { kind: 'using' }>): void {
     for (const name of declaration.names) {
       if (declaration.isNamespace) {
-        // Only `std` exists in this engine, so importing anything else changes nothing.
         if (name === 'std') this.stdNamespaceImported = true;
+        else this.importedNamespaces.add(name);
         continue;
       }
-      this.importedNames.add(name.replace(/^std::/, ''));
+      // A qualified name brings in that one name; a bare one is already visible.
+      const bare = name.replace(/^.*::/, '');
+      this.importedNames.add(bare);
+      if (name.includes('::')) this.importedFrom.add(`${name} -> ${bare}`);
+    }
+  }
+
+  /**
+   * `using namespace outer::inner;` makes that namespace's names visible unqualified.
+   *
+   * Runs after the functions and globals exist, because it works by adding the bare
+   * name alongside the qualified one - the same object, so a write through either
+   * spelling reaches the same memory.
+   */
+  private applyNamespaceImports(): void {
+    if (this.importedNamespaces.size === 0) return;
+
+    for (const namespace of this.importedNamespaces) {
+      const prefix = `${namespace}::`;
+
+      for (const [name, declaration] of [...this.definitions]) {
+        if (!name.startsWith(prefix)) continue;
+        const bare = name.slice(prefix.length);
+        if (this.definitions.has(bare)) continue;
+        this.definitions.set(bare, { ...declaration, name: bare });
+        this.functions.set(bare, { ...declaration, name: bare });
+        if (!this.functionTable.includes(bare)) this.functionTable.push(bare);
+      }
+
+      for (const binding of [...this.allBindings]) {
+        if (!binding.name.startsWith(prefix)) continue;
+        const bare = binding.name.slice(prefix.length);
+        if (this.lookup(bare)) continue;
+        // The same binding under its bare name, so a write through either spelling
+        // reaches the same memory. Globals live in their own map, not in a scope.
+        if (this.globals.has(binding.name)) {
+          this.globals.set(bare, { ...binding, name: bare });
+          continue;
+        }
+        const scope = this.scopes[this.scopes.length - 1];
+        scope?.bindings.set(bare, { ...binding, name: bare });
+      }
     }
   }
 
