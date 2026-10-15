@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { emptyWatch } from '@/engine/types';
 import { MobileTabs } from '@/ui/MobileTabs';
 import { useAppStore } from '@/state/store';
 
@@ -10,14 +11,7 @@ describe('Enhanced MobileTabs', () => {
       mobilePane: 'code',
       analysisState: 'idle',
       runState: 'idle',
-      watch: {
-        variables: [],
-        diagnostics: [],
-        history: [],
-        timelineIndex: 0,
-        timelineCount: 0,
-        iterations: {},
-      },
+      watch: emptyWatch(),
     });
   });
 
@@ -46,14 +40,19 @@ describe('Enhanced MobileTabs', () => {
 
   it('displays problem badge when diagnostics exist', () => {
     useAppStore.setState({
-      watch: {
-        variables: [],
-        diagnostics: [{ line: 1, column: 1, message: 'syntax error', severity: 'error' }],
-        history: [],
-        timelineIndex: 0,
-        timelineCount: 0,
-        iterations: {},
-      },
+      watch: emptyWatch({
+        diagnostics: [
+          {
+            severity: 'error',
+            message: 'syntax error',
+            source: 'main.cpp',
+            startLine: 1,
+            startColumn: 1,
+            endLine: 1,
+            endColumn: 5,
+          },
+        ],
+      }),
     });
     render(<MobileTabs />);
     expect(screen.getByTitle(/1 problem\(s\)/i)).toBeDefined();
