@@ -1738,8 +1738,33 @@ button {
   padding: 4px 0;
 }
 
+.problems__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--vs-border);
+  margin-bottom: 4px;
+}
+
+.problems__count {
+  font-size: 11px;
+  color: var(--vs-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.problems__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .problem {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   width: 100%;
   padding: 3px 10px;
@@ -1749,10 +1774,19 @@ button {
   text-align: left;
   font-family: var(--vs-font-mono);
   font-size: 12px;
+  user-select: text;
 }
 
 .problem:hover {
   background: var(--vs-hover);
+}
+
+.problem__content {
+  display: flex;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: baseline;
 }
 
 .problem__seat {
@@ -1763,6 +1797,7 @@ button {
 .problem__msg {
   flex: 1 1 auto;
   color: var(--vs-text);
+  word-break: break-word;
 }
 
 .problem--error .problem__msg {
@@ -1771,6 +1806,37 @@ button {
 
 .problem--warning .problem__msg {
   color: var(--vs-warning);
+}
+
+.problem__copy-btn {
+  flex: 0 0 auto;
+  opacity: 0;
+  background: transparent;
+  border: 1px solid var(--vs-border);
+  border-radius: 3px;
+  color: var(--vs-text-muted);
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.problem:hover .problem__copy-btn,
+.problem:focus-within .problem__copy-btn,
+.problem__copy-btn:focus {
+  opacity: 1;
+}
+
+.problem__copy-btn:hover {
+  background: var(--vs-hover);
+  color: var(--vs-text);
+  border-color: var(--vs-accent);
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .problem__copy-btn {
+    opacity: 0.8;
+  }
 }
 
 /* ---------- status bar ---------- */
