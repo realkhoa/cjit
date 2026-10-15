@@ -218,7 +218,19 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
   };
 
   const ready = (async () => {
-    const source = await options.files.readText('shared.js');
+    let source = await options.files.readText('shared.js');
+    if (source.includes("throw new NotImplemented('wasi_unstable', 'clock_time_get');")) {
+      source = source.replace(
+        "throw new NotImplemented('wasi_unstable', 'clock_time_get');",
+        `this.mem.check();
+        const nowMs = Date.now();
+        const nanos = BigInt(nowMs) * 1000000n;
+        const vlo = Number(nanos & 0xffffffffn);
+        const vhi = Number((nanos >> 32n) & 0xffffffffn);
+        this.mem.write64(time_out, vlo, vhi);
+        return ESUCCESS;`,
+      );
+    }
     // Fresh scope per evaluation: the script declares a lexical `const API`.
     const factory = new Function(`${source}\nreturn API;`) as () => ClangApiConstructor;
     const Api = factory();
@@ -321,18 +333,29 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
       const objects: string[] = [];
       for (const unit of units) {
         const object = `${unit.path}.o`;
+        const lang = languageOf(unit.path);
+        const stdFlag = lang === 'c++'
+          ? [
+              '-std=c++17',
+              '-D_LIBCPP_CONFIG_SITE',
+              '-D_LIBCPP_ABI_VERSION=2',
+              '-D_LIBCPP_HAS_MUSL_LIBC',
+              '-D_LIBCPP_HAS_NO_THREADS',
+            ]
+          : ['-std=c11'];
         await instance.run(
           clang,
           'clang',
           '-cc1',
           '-emit-obj',
           ...commonArgs,
+          ...stdFlag,
           '-fno-color-diagnostics',
           '-O2',
           '-o',
           object,
           '-x',
-          languageOf(unit.path),
+          lang,
           unit.path,
         );
         objects.push(object);
