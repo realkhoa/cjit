@@ -18,9 +18,9 @@ console below, VS 2022 dark theme. Two engines:
 |---|---|
 | Live | https://realkhoa.github.io/cjit/ |
 | Deploy | GitHub Actions → Pages (`worktree main`, `enablement: true`) |
-| Tests | **724 passing, 58 files** (`npm test`) |
+| Tests | **733 passing, 59 files** (`npm test`) |
 | Typecheck / build | both clean (`npm run typecheck`, `npm run build`) |
-| Last deploy | CI green, `index-aXOFXXco.js` |
+| Last deploy | CI green, `index-CnJzTQkl.js` |
 
 ## 2. The active goal (this is the job)
 
@@ -79,13 +79,13 @@ Two suites run it:
   missing**, which is the case in CI, so **run it locally** (`npm run toolchain` first if needed). It has
   already caught **8 wrong expectations written by me** where the engine was right.
 
-Current state: **45 `fast` cases**, 1 gap left:
+Current state: **46 `fast` cases**, 1 gap left:
 
 | Gap | What is missing |
 |---|---|
-| `function overloading` | two functions with one name; the engine refuses loudly instead of guessing |
+| `class inheritance` | derived class inheriting members from a base struct |
 
-## 5. What is done (goal features 1–10)
+## 5. What is done (goal features 1–11)
 
 | # | Feature | Tests | Notes |
 |---|---|---|---|
@@ -99,6 +99,7 @@ Current state: **45 `fast` cases**, 1 gap left:
 | 8 | `new`/`delete`, `std::sort` with a comparator, **class templates** | `tests/classTemplates.test.ts` + corpus | templates: several instantiations, two parameters, a container member, a self-referential pointer. **Methods of a class template are not supported** and warn |
 | 9 | Range-for over initializer lists | `tests/cpp.test.ts` + corpus | `for (int v : {1, 2, 3})`, typed or auto/reference |
 | 10 | `std::stringstream` / `std::ostringstream` | corpus | `out << text << int; out.str()`; shared buffer layout with std::string |
+| 11 | Function overloading | `tests/overloading.test.ts` + corpus | C++ overload resolution (exact match, promotion, conversion, arity, ambiguity rejection, class methods) |
 
 Other shipped work (from earlier rounds, all deployed): projects (several in one workspace, each with its own
 files, recoverable project trash, `cjit.files.v3` with v1/v2 migration), data safety (file trash, non-destructive

@@ -5,11 +5,10 @@ import type {
   Expression,
   FunctionDeclNode,
   LambdaExpr,
-
-
   Statement,
   StructDeclNode,
   TranslationUnit,
+  TypeRef,
   VarDecl,
 } from '@/lang/ast';
 import {
@@ -24,6 +23,7 @@ import {
   elementTypeFromCode,
   isFloatType,
   isIntegerType,
+  isNumericType,
   isPointerType,
   isPairType,
   isStreamBuffer,
@@ -287,6 +287,22 @@ function doubleType(): CType {
   return { kind: 'double', name: 'double', size: 8, signed: true, bits: 64 };
 }
 
+/**
+ * @brief Constructs the descriptor for the 32-bit single-precision floating point type.
+ * @return CType descriptor for float.
+ */
+function floatType(): CType {
+  return { kind: 'float', name: 'float', size: 4, signed: true, bits: 32 };
+}
+
+/**
+ * @brief Constructs the descriptor for the 1-byte boolean type.
+ * @return CType descriptor for bool.
+ */
+function boolType(): CType {
+  return { kind: 'bool', name: 'bool', size: 1, signed: false, bits: 8 };
+}
+
 function charType(): CType {
   return { kind: 'char', name: 'char', size: 1, signed: true, bits: 8 };
 }
@@ -459,10 +475,8 @@ class Interpreter {
   private readonly importedNamespaces = new Set<string>();
   /** Qualified names imported one at a time, kept for diagnostics. */
   private readonly importedFrom = new Set<string>();
-  /** First signature seen for each function name, to spot an overload. */
-  private readonly functionSignatures = new Map<string, string>();
-  /** Names defined more than once with different parameters: a call must refuse. */
-  private readonly overloadedNames = new Set<string>();
+  /** Overloaded function declarations by name. */
+  private readonly functionOverloads = new Map<string, FunctionDeclNode[]>();
   /** Access of each registered method, keyed by its qualified name. */
   private readonly methodAccess = new Map<string, 'public' | 'private' | 'protected'>();
   /** Constructors by class tag and parameter count. */
@@ -794,36 +808,42 @@ class Interpreter {
     }
   }
 
-  private registerFunction(declaration: FunctionDeclNode): void {
-    /*
-     * Overloading is not implemented, and a name defined twice must say so.
-     *
-     * Registering both silently kept the last one, so `void show(int)` plus
-     * `void show(double)` made every call print the double's output - a wrong answer
-     * with no warning at all. Refusing is the honest half of the contract: a program
-     * that cannot be run correctly is reported, not approximated.
-     */
-    const signature = declaration.params
-      .map((param) => `${param.type.name}${param.type.pointee ? '*' : ''}`)
+  /**
+   * @brief Generates a canonical parameter type signature string for a function declaration.
+   * @details Encodes qualifiers, pointers, references, and parameter type names to identify overloads.
+   * @param declaration The function declaration node.
+   * @return A comma-separated parameter signature string.
+   */
+  private functionSignature(declaration: FunctionDeclNode): string {
+    return declaration.params
+      .map((param) => {
+        const ref = param.type.reference ? '&' : '';
+        const ptr = param.type.pointee ? '*' : '';
+        const constQual = param.type.qualifiers?.includes('const') ? 'const ' : '';
+        return `${constQual}${param.type.name}${ptr}${ref}`;
+      })
       .join(',');
+  }
 
-    const existing = this.functionSignatures.get(declaration.name);
-    if (existing !== undefined && existing !== signature) {
-      if (!this.overloadedNames.has(declaration.name)) {
-        this.overloadedNames.add(declaration.name);
-        this.diagnostics.push(
-          makeDiagnostic(
-            'warning',
-            `overloaded function '${declaration.name}' is not supported by the fast engine; Run (F5) uses clang-wasm`,
-            declaration.start.file,
-            declaration.start,
-            declaration.end,
-          ),
-        );
+  /**
+   * @brief Registers a function declaration or definition.
+   * @details If a function with the same name and parameter signature exists, a definition
+   * updates the earlier prototype. If the signature is distinct, it is registered as an overload.
+   * @param declaration The function AST node to register.
+   */
+  private registerFunction(declaration: FunctionDeclNode): void {
+    const list = this.functionOverloads.get(declaration.name) ?? [];
+    const signature = this.functionSignature(declaration);
+    const existingIndex = list.findIndex((item) => this.functionSignature(item) === signature);
+
+    if (existingIndex >= 0) {
+      if (declaration.body || !list[existingIndex]?.body) {
+        list[existingIndex] = declaration;
       }
     } else {
-      this.functionSignatures.set(declaration.name, signature);
+      list.push(declaration);
     }
+    this.functionOverloads.set(declaration.name, list);
 
     this.functions.set(declaration.name, declaration);
     if (!declaration.body) return;
@@ -1542,6 +1562,19 @@ class Interpreter {
         if (!this.functionTable.includes(bare)) this.functionTable.push(bare);
       }
 
+      for (const [name, overloads] of [...this.functionOverloads]) {
+        if (!name.startsWith(prefix)) continue;
+        const bare = name.slice(prefix.length);
+        const existing = this.functionOverloads.get(bare) ?? [];
+        for (const decl of overloads) {
+          const sig = this.functionSignature(decl);
+          if (!existing.some((item) => this.functionSignature(item) === sig)) {
+            existing.push({ ...decl, name: bare });
+          }
+        }
+        this.functionOverloads.set(bare, existing);
+      }
+
       for (const binding of [...this.allBindings]) {
         if (!binding.name.startsWith(prefix)) continue;
         const bare = binding.name.slice(prefix.length);
@@ -2113,6 +2146,197 @@ class Interpreter {
   }
 
   /**
+   * @brief Scores conversion rank between an argument expression and parameter type according to C++ rules.
+   * @details Ranks:
+   * 0: Exact match or reference binding without conversion.
+   * 1: Promotion (integral promotion e.g. char/bool/short -> int, or float -> double).
+   * 2: Standard conversion (numeric conversions, pointer conversions, array-to-pointer decay).
+   * 3: User conversion (e.g. const char* / string literal to std::string).
+   * -1: Incompatible.
+   * @param arg The argument expression AST node.
+   * @param argType The deduced type of the argument.
+   * @param paramRef The AST type reference of the parameter.
+   * @param paramType The resolved CType of the parameter.
+   * @return Numeric rank (0..3) or -1 if incompatible.
+   */
+  private matchConversionRank(
+    arg: Expression,
+    argType: CType,
+    paramRef: TypeRef,
+    paramType: CType,
+  ): number {
+    const isParamRef = Boolean(paramRef.reference);
+    const targetType = isParamRef && paramType.pointee ? paramType.pointee : paramType;
+
+    // Check for exact match
+    if (
+      argType.kind === targetType.kind &&
+      (argType.name === targetType.name ||
+        (isIntegerType(argType) &&
+          isIntegerType(targetType) &&
+          argType.size === targetType.size &&
+          argType.signed === targetType.signed))
+    ) {
+      if (isParamRef && !this.isConstReference(paramRef)) {
+        const bound = this.lvalue(arg);
+        if (!bound) return -1;
+      }
+      return 0;
+    }
+
+    // Array-to-pointer decay for exact element types
+    if (
+      argType.kind === 'array' &&
+      targetType.kind === 'pointer' &&
+      targetType.pointee &&
+      argType.element &&
+      (targetType.pointee.name === argType.element.name || targetType.pointee.kind === argType.element.kind)
+    ) {
+      return 0;
+    }
+
+    // std::string compatibility
+    if (isStringType(targetType)) {
+      if (isStringType(argType)) return 0;
+      if (arg.kind === 'literal' && arg.literal === 'string') return 3;
+      if (argType.kind === 'array' && argType.element?.kind === 'char') return 3;
+      if (argType.kind === 'pointer' && argType.pointee?.kind === 'char') return 3;
+    }
+
+    // Reference binding constraints
+    if (isParamRef) {
+      if (!this.isConstReference(paramRef)) {
+        const bound = this.lvalue(arg);
+        if (!bound) return -1;
+        if (argType.name !== targetType.name) return -1;
+        return 0;
+      }
+    }
+
+    // Integral promotions: char / bool / short -> int (or unsigned int)
+    if (
+      (argType.kind === 'char' || argType.kind === 'bool' || argType.name.includes('short')) &&
+      targetType.kind === 'int' &&
+      targetType.size >= 4
+    ) {
+      return 1;
+    }
+
+    // Floating-point promotion: float -> double
+    if (argType.kind === 'float' && targetType.kind === 'double') {
+      return 1;
+    }
+
+    // Standard numeric conversions
+    if (isNumericType(argType) && isNumericType(targetType)) {
+      return 2;
+    }
+
+    // Pointer conversions
+    if (targetType.kind === 'pointer') {
+      if (arg.kind === 'literal' && arg.literal === 'number' && Number(arg.text) === 0) {
+        return 2;
+      }
+      if (argType.kind === 'array' && targetType.pointee?.kind === 'void') {
+        return 2;
+      }
+      if (argType.kind === 'pointer' && targetType.pointee?.kind === 'void') {
+        return 2;
+      }
+    }
+
+    return -1;
+  }
+
+  /**
+   * @brief Selects the best matching function overload for a set of call arguments.
+   * @details Evaluates candidates by viability (arity and parameter constraints), ranks conversions,
+   * and selects a strictly best candidate. Throws RuntimeFault on ambiguity or no match.
+   * @param candidates Viable function declarations sharing a name.
+   * @param args The call argument expressions.
+   * @param callSite Source position of the call for error reporting.
+   * @return The best matching FunctionDeclNode.
+   */
+  private resolveOverload(
+    candidates: readonly FunctionDeclNode[],
+    args: readonly Expression[],
+    callSite: SourcePos,
+  ): FunctionDeclNode {
+    if (candidates.length === 1 && candidates[0]) {
+      return candidates[0];
+    }
+
+    const viable: Array<{ candidate: FunctionDeclNode; ranks: number[] }> = [];
+
+    for (const candidate of candidates) {
+      const minArgs = candidate.params.filter((param) => !param.defaultValue).length;
+      const maxArgs = candidate.variadic ? Infinity : candidate.params.length;
+      if (args.length < minArgs || args.length > maxArgs) {
+        continue;
+      }
+
+      const ranks: number[] = [];
+      let isViable = true;
+
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i]!;
+        const param = candidate.params[i];
+        if (!param) {
+          if (candidate.variadic) {
+            ranks.push(4);
+            continue;
+          }
+          isViable = false;
+          break;
+        }
+
+        const paramType = this.resolver.resolve(param.type);
+        const argType = this.typeOf(arg);
+        const rank = this.matchConversionRank(arg, argType, param.type, paramType);
+        if (rank === -1) {
+          isViable = false;
+          break;
+        }
+        ranks.push(rank);
+      }
+
+      if (isViable) {
+        viable.push({ candidate, ranks });
+      }
+    }
+
+    if (viable.length === 0) {
+      const name = candidates[0]?.name ?? 'function';
+      throw new RuntimeFault(`no matching function for call to '${name}'`, callSite);
+    }
+
+    if (viable.length === 1) {
+      return viable[0]!.candidate;
+    }
+
+    const isBetter = (a: { ranks: number[] }, b: { ranks: number[] }): boolean => {
+      let atLeastOneBetter = false;
+      const count = Math.min(a.ranks.length, b.ranks.length);
+      for (let k = 0; k < count; k++) {
+        if (a.ranks[k]! > b.ranks[k]!) return false;
+        if (a.ranks[k]! < b.ranks[k]!) atLeastOneBetter = true;
+      }
+      return atLeastOneBetter;
+    };
+
+    const winner = viable.find((cand) =>
+      viable.every((other) => other === cand || isBetter(cand, other)),
+    );
+
+    if (!winner) {
+      const name = candidates[0]?.name ?? 'function';
+      throw new RuntimeFault(`call of overloaded '${name}' is ambiguous`, callSite);
+    }
+
+    return winner.candidate;
+  }
+
+  /**
    * `counter.add(3)` - a method on a class or struct.
    *
    * The object is passed as `this` rather than copied, so a method that changes a
@@ -2121,6 +2345,7 @@ class Interpreter {
    */
   private resolveMethodCall(
     callee: Extract<Expression, { kind: 'member' }>,
+    args: readonly Expression[],
     position: SourcePos,
   ): { declaration: FunctionDeclNode; thisAddress: number; thisType: CType } | null {
     let baseAddress: number;
@@ -2145,7 +2370,11 @@ class Interpreter {
     if (tag.length === 0) return null;
 
     const qualified = `${tag}::${callee.property}`;
-    const declaration = this.definitions.get(qualified);
+    const overloads = this.functionOverloads.get(qualified);
+    const declaration =
+      overloads && overloads.length > 0
+        ? this.resolveOverload(overloads, args, position)
+        : this.definitions.get(qualified);
     if (!declaration) return null;
 
     const access = this.methodAccess.get(qualified) ?? 'public';
@@ -2354,12 +2583,12 @@ class Interpreter {
     if (callee.kind === 'identifier') {
       const name = callee.name;
 
-      if (this.overloadedNames.has(name)) {
-        // Picking one would be a guess, and a guess here is a wrong answer.
-        throw new RuntimeFault(
-          `function '${name}' is overloaded, which the fast engine does not support yet`,
-          expression.start,
-        );
+      const overloads = this.functionOverloads.get(name);
+      const withBody = overloads?.filter((fn) => fn.body !== undefined) ?? [];
+
+      if (withBody.length > 0) {
+        const resolved = this.resolveOverload(withBody, expression.args, expression.start);
+        return this.callFunction(resolved, this.callArguments(expression.args, resolved));
       }
 
       const definition = this.definitions.get(name);
@@ -2374,7 +2603,7 @@ class Interpreter {
       if (helper !== undefined) return helper;
 
       // A prototype with no body: report it as such rather than as "unknown".
-      const prototype = this.functions.get(name);
+      const prototype = overloads?.[0] ?? this.functions.get(name);
       if (prototype) {
         throw new RuntimeFault(
           `function '${name}' has no body (only a prototype was declared)`,
@@ -2392,8 +2621,21 @@ class Interpreter {
     if (callee.kind === 'identifier') {
       const current = this.callStack[this.callStack.length - 1]?.name ?? '';
       const owner = current.includes('::') ? current.slice(0, current.lastIndexOf('::')) : '';
-      const sameClass = owner.length > 0 ? this.definitions.get(`${owner}::${callee.name}`) : undefined;
+      const qualified = `${owner}::${callee.name}`;
+      const overloads = owner.length > 0 ? this.functionOverloads.get(qualified) : undefined;
+      const sameClass =
+        overloads && overloads.length > 0
+          ? this.resolveOverload(overloads, expression.args, expression.start)
+          : owner.length > 0
+            ? this.definitions.get(qualified)
+            : undefined;
       if (sameClass) {
+        if (!sameClass.body) {
+          throw new RuntimeFault(
+            `method '${callee.name}' has no body (only a prototype was declared)`,
+            expression.start,
+          );
+        }
         const self = this.lookup('this');
         const target = self ? this.memory.readUint64(self.address) : undefined;
         return this.callFunction(
@@ -2408,7 +2650,7 @@ class Interpreter {
     // Container member calls: v.size(), v.push_back(x), s.substr(1, 2)…
     if (callee.kind === 'member') {
       // A method of a class or struct comes first: `counter.add(3)`.
-      const method = this.resolveMethodCall(callee, expression.start);
+      const method = this.resolveMethodCall(callee, expression.args, expression.start);
       if (method) {
         const args = this.callArguments(expression.args, method.declaration);
         return this.callFunction(method.declaration, args, method.thisAddress, method.thisType);
@@ -4524,14 +4766,41 @@ class Interpreter {
     return value;
   }
 
+  /**
+   * @brief Statically evaluates the CType of an expression without side effects.
+   * @details Resolves variables, literals, operators, and return types for overload resolution.
+   * @param expression The expression AST node.
+   * @return The deduced CType.
+   */
   private typeOf(expression: Expression): CType {
     switch (expression.kind) {
       case 'identifier': {
         const binding = this.lookup(expression.name);
         return binding?.type ?? intType();
       }
-      case 'literal':
-        return expression.literal === 'string' ? arrayOf(charType(), (expression.value ?? '').length + 1) : intType();
+      case 'literal': {
+        if (expression.literal === 'string') {
+          return arrayOf(charType(), (expression.value ?? '').length + 1);
+        }
+        if (expression.literal === 'char') {
+          return charType();
+        }
+        const text = expression.text;
+        const isFloat =
+          text.includes('.') ||
+          (!/^0[xXbB]/.test(text) && /[eE][-+]?\d/.test(text)) ||
+          (/[fF]$/.test(text) && text.includes('.'));
+        if (isFloat) {
+          return text.toLowerCase().endsWith('f') ? floatType() : doubleType();
+        }
+        if (/u/i.test(text)) {
+          return { kind: 'int', name: 'unsigned int', size: 4, signed: false, bits: 32 };
+        }
+        if (/l/i.test(text)) {
+          return longType();
+        }
+        return intType();
+      }
       case 'cast':
         return this.resolver.resolve(expression.type);
       case 'index': {
@@ -4543,7 +4812,19 @@ class Interpreter {
         const target = expression.arrow ? base.pointee : base;
         return target?.members?.find((item) => item.name === expression.property)?.type ?? intType();
       }
+      case 'binary': {
+        if (['==', '!=', '<', '<=', '>', '>=', '&&', '||'].includes(expression.operator)) {
+          return boolType();
+        }
+        const leftType = this.typeOf(expression.left);
+        const rightType = this.typeOf(expression.right);
+        if (leftType.kind === 'double' || rightType.kind === 'double') return doubleType();
+        if (leftType.kind === 'float' || rightType.kind === 'float') return floatType();
+        if (leftType.size >= 8 || rightType.size >= 8) return longType();
+        return intType();
+      }
       case 'unary':
+        if (expression.operator === '!') return boolType();
         if (expression.operator === '&') return pointerTo(this.typeOf(expression.operand));
         if (expression.operator === '*') return this.typeOf(expression.operand).pointee ?? intType();
         return this.typeOf(expression.operand);
@@ -4551,6 +4832,15 @@ class Interpreter {
         return longType();
       case 'call': {
         if (expression.callee.kind === 'identifier') {
+          const overloads = this.functionOverloads.get(expression.callee.name);
+          if (overloads && overloads.length > 0) {
+            try {
+              const matched = this.resolveOverload(overloads, expression.args, expression.start);
+              return this.resolver.resolve(matched.returnType);
+            } catch {
+              return this.resolver.resolve(overloads[0]!.returnType);
+            }
+          }
           const declaration = this.functions.get(expression.callee.name);
           if (declaration) return this.resolver.resolve(declaration.returnType);
         }
