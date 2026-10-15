@@ -177,7 +177,7 @@ tests/                       one file per feature; tests/conformance/ is the cor
 ```powershell
 cd E:\sourcecode\cjit
 npm install            # if node_modules is missing
-npm test               # expect 705 passing
+npm test               # expect 720 passing
 npx vitest run tests/conformance.test.ts        # the work list
 npm run toolchain      # only if public/toolchain is missing (58 MB) - enables the clang comparison
 npx vitest run tests/conformanceVsClang.test.ts # the authority on what clang prints
