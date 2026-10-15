@@ -2,17 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { analyzeSource } from '@/lang/analyze';
 import { execute } from '@/lang/runtime/interpreter';
 import type { ExecutionResult } from '@/lang/runtime/interpreter';
-import { SAMPLE_MAIN_CPP } from '@/examples/sample';
+import { SAMPLE_MAIN_CPP, exampleFileMap } from '@/examples/sample';
 
 /**
  * The fast engine resolves the C++ code people actually write here - iostream,
  * vector, string, algorithm, templates, range-based for - instead of pushing it
  * to clang-wasm. These tests are the contract for that: no diagnostics, and the
  * program really runs.
+ *
+ * The sample is a project (`main.cpp` includes `util.h`), so the whole project is
+ * handed to the engine: analysing one file alone reports a missing include that is
+ * the caller's fault, not the sample's.
  */
 
 function analyse(source: string, file = 'main.cpp') {
-  return analyzeSource(source, file);
+  return analyzeSource(source, file, { files: exampleFileMap() });
 }
 
 function run(source: string, file = 'main.cpp'): ExecutionResult {
@@ -34,31 +38,27 @@ describe('C++ resolution: the default sample', () => {
     expect(analysis.infoCount).toBe(0);
   });
 
-  it('runs and prints the right answer', () => {
+  it('runs the whole tour and prints what each container produced', () => {
     const result = run(SAMPLE_MAIN_CPP);
 
     expect(result.status).toBe('ok');
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('sum = 31\ncount = 8\ndone\n');
+    expect(result.stdout).toContain('sorted: [1, 1, 2, 3, 4, 5, 6, 9]');
+    expect(result.stdout).toContain('sum = 31');
+    expect(result.stdout).toContain('red appears 3 times');
   });
 
-  it('reports real values from inside the template function and main', () => {
+  it('reports real values from main, including what the template saw', () => {
     const result = run(SAMPLE_MAIN_CPP);
     const byName = new Map(result.vars.map((item) => [item.name, item]));
 
-    expect(byName.get('total')?.value).toBe('31');
-    expect(byName.get('total')?.type).toBe('int');
     expect(byName.get('nums')?.type).toBe('std::vector<int>');
-    expect(byName.get('nums')?.children?.map((child) => child.value)).toEqual([
-      '3',
-      '1',
-      '4',
-      '1',
-      '5',
-      '9',
-      '2',
-      '6',
-    ]);
+    // Sorted in place by std::sort, so the pane shows the sorted order.
+    expect(byName.get('nums')?.value).toBe('[1, 1, 2, 3, 4, 5, 6, 9]');
+    expect(byName.get('unique')?.value).toBe('{1, 2, 3, 4, 5, 6, 9}');
+    expect(byName.get('counts')?.value).toContain('"red": 3');
+    // A binding from inside the template function is visible too.
+    expect(byName.get('value')).toBeDefined();
   });
 });
 

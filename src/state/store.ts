@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { DEFAULT_EXAMPLE } from '@/examples/sample';
+import { DEFAULT_EXAMPLE, EXAMPLES } from '@/examples/sample';
 import { getEngine, isEngineWired } from '@/engine/registry';
 import type { EngineId, SourceFile, WatchSnapshot } from '@/engine/types';
 import type { ArtifactKind } from '@/engine/types';
@@ -8,6 +8,7 @@ import { DebouncedAnalyzer } from '@/state/analyzeController';
 import {
   createFile as createStoredFile,
   findFile,
+  initialProjectWorkspace,
   initialWorkspace,
   languageForPath,
   renameFile,
@@ -219,15 +220,23 @@ function nextFileId(): string {
   return `file-${Date.now().toString(36)}-${fileSeq}`;
 }
 
-/** The workspace to start from: what the browser stored, or a fresh one. */
+/**
+ * The workspace to start from: what the browser stored, or the bundled project.
+ *
+ * A first-time visitor gets every bundled sample file, not just the first one, so
+ * the explorer, the multi-file include resolution and the entry-point rule are all
+ * visible from the first second.
+ */
 function initialFiles(): FilesWorkspace & { readonly trash: readonly TrashedFile[] } {
   const stored = loadFilesWorkspace();
   if (stored) return { ...stored, trash: stored.trash ?? [] };
   return {
-    ...initialWorkspace('file-1', Date.now(), {
-      path: DEFAULT_EXAMPLE.path,
-      code: DEFAULT_EXAMPLE.code,
-    }),
+    ...initialProjectWorkspace(
+      EXAMPLES.map((file) => ({ path: file.path, code: file.code })),
+      (index) => `file-${index + 1}`,
+      Date.now(),
+      { path: DEFAULT_EXAMPLE.path, code: DEFAULT_EXAMPLE.code },
+    ),
     trash: [],
   };
 }

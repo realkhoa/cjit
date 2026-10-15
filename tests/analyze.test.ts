@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { registerDefaultEngines } from '@/engine/bootstrap';
 import { createFastEngine } from '@/engine/fastEngine';
 import type { RunSink } from '@/engine/types';
-import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP } from '@/examples/sample';
+import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP, exampleFiles, exampleFileMap } from '@/examples/sample';
 import { getPublishedAnalysis } from '@/lang/analysisCache';
 import { analyzeSource } from '@/lang/analyze';
 import { flushAnalysis, useAppStore } from '@/state/store';
@@ -51,7 +51,7 @@ describe('analyze: the whole front-end on real code', () => {
   });
 
   it('resolves the default C++ sample with no diagnostics at all', () => {
-    const result = analyzeSource(SAMPLE_MAIN_CPP, 'main.cpp');
+    const result = analyzeSource(SAMPLE_MAIN_CPP, 'main.cpp', { files: exampleFileMap() });
 
     expect(result.diagnostics).toEqual([]);
     expect(result.errorCount).toBe(0);
@@ -150,7 +150,7 @@ describe('engine output feeds the editor overlays', () => {
   it('produces inline overlays and loop iterations for the default C++ sample', async () => {
     const engine = createFastEngine();
     const snapshot = await engine.watch(
-      { code: SAMPLE_MAIN_CPP, file: 'main.cpp' },
+      { code: SAMPLE_MAIN_CPP, file: 'main.cpp', files: exampleFiles() },
       new AbortController().signal,
     );
 
@@ -167,18 +167,27 @@ describe('engine output feeds the editor overlays', () => {
       expect(spec.content).toContain('//');
     }
 
-    // The sample's range-based for runs over 8 elements, recorded per pass.
+    // The tour runs several loops (the sort's output loop, the map's word loop,
+    // the container walks), so iterations are recorded per pass.
     const passes = snapshot.history.filter((entry) => entry.kind === 'loop-iteration');
     expect(passes.length).toBeGreaterThanOrEqual(8);
 
-    // And a caret on the loop body finds exactly that loop's iterations.
-    const table = buildIterationTable(snapshot.history, 9);
+    // And a caret on the loop body finds exactly that loop's iterations. Line 34 is
+    // main.cpp's `for (const auto& value : nums)` while building the set, which runs
+    // once per element of nums - eight of them.
+    const table = buildIterationTable(snapshot.history, 34);
     expect(table.rows.length).toBe(8);
-    expect(table.rows.map((row) => row.globalIteration)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // `globalIteration` counts passes across the whole run, so an earlier loop makes
+    // this one start above 1. What matters is that these eight are consecutive: they
+    // are the eight passes of this loop and nothing else.
+    const iterations = table.rows.map((row) => row.globalIteration);
+    expect(iterations[7]! - iterations[0]!).toBe(7);
 
     // A vector reads inline as `[value, value, ...]`, not as a type and an address.
+    // `std::sort` has already run, so the pane shows the sorted contents.
     const vectorOverlay = specs.find((spec) => spec.content.includes('nums = ['));
-    expect(vectorOverlay?.content).toContain('[3, 1, 4, 1, 5, 9, 2, 6]');
+    expect(vectorOverlay?.content).toContain('[1, 1, 2, 3, 4, 5, 6, 9]');
   });
 });
 

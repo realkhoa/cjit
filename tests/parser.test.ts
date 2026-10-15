@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Declaration, FunctionDeclNode, Statement, TypeRef, VarDecl } from '@/lang/ast';
-import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP } from '@/examples/sample';
+import { SAMPLE_HELLO_C, SAMPLE_MAIN_CPP, exampleFileMap } from '@/examples/sample';
 import { parse } from '@/lang/parser';
 import type { ParseResult } from '@/lang/parser';
 import { preprocess } from '@/lang/preprocessor';
@@ -17,8 +17,12 @@ function parseSource(source: string, options: PreprocessOptions = {}): ParseResu
 }
 
 /** Exactly what the engine does: prelude + implicit headers. */
-function parseAsEngine(source: string, file = 'main.c'): ParseResult {
-  const pre = preprocess(source, file, {});
+function parseAsEngine(
+  source: string,
+  file = 'main.c',
+  options: PreprocessOptions = {},
+): ParseResult {
+  const pre = preprocess(source, file, options);
   return parse(pre.tokens, file);
 }
 
@@ -388,14 +392,14 @@ describe('parser: error recovery', () => {
 
 describe('parser: C++ degradation is honest, not noisy', () => {
   it('parses the default C++ sample with zero errors and zero warnings', () => {
-    const result = parseAsEngine(SAMPLE_MAIN_CPP, 'main.cpp');
+    const result = parseAsEngine(SAMPLE_MAIN_CPP, 'main.cpp', { files: exampleFileMap() });
 
     // The engine resolves templates, containers and streams itself now, so the
     // sample must be completely quiet.
     expect(errors(result)).toEqual([]);
     expect(warnings(result)).toEqual([]);
     expect(infos(result)).toEqual([]);
-    expect(functions(result).map((fn) => fn.name)).toEqual(expect.arrayContaining(['sum', 'main']));
+    expect(functions(result).map((fn) => fn.name)).toEqual(expect.arrayContaining(['printAll', 'main']));
   });
 
   it('parses a template function and a top-level std::string as real declarations', () => {

@@ -149,7 +149,9 @@ describe('touch reachability', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Files' }));
 
     // These controls were hover-only, which made them unreachable on a phone.
-    fireEvent.click(screen.getByRole('button', { name: /^Rename / }));
+    // The default workspace is a project, so there is one per file: the first is
+    // the open one.
+    fireEvent.click(screen.getAllByRole('button', { name: /^Rename / })[0] as HTMLElement);
 
     const input = screen.getByRole('textbox', { name: 'File name' });
     expect(input).toBeTruthy();

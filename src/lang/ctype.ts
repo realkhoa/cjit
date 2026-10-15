@@ -562,6 +562,14 @@ export class TypeResolver {
   }
 
   resolveByName(rawName: string, depth = 0): CType {
+    /*
+     * `auto` is not a type yet - the value it is given decides. Stripping the
+     * keyword and falling through to the empty-name default returned `int`, the
+     * guess the parser's own comment forbids, and it silently turned an `auto`
+     * iterator into a number: `end() - begin()` then reported bytes, not elements.
+     */
+    if (/\bauto\b/.test(rawName)) return { ...UNKNOWN_TYPE, name: 'auto' };
+
     const name = stripQualifiers(rawName);
     if (name.length === 0) return SCALAR_BY_NAME.get('int') ?? UNKNOWN_TYPE;
 

@@ -301,3 +301,36 @@ export function initialWorkspace(
   };
   return { files: [file], activeId: file.id };
 }
+
+/**
+ * A workspace that starts as a project rather than a single file.
+ *
+ * The bundled samples are handed in as plain `{path, code}` pairs so this stays
+ * free of the examples module - but the point is that a first-time visitor lands in
+ * the whole project, with the first file open.
+ */
+export function initialProjectWorkspace(
+  entries: readonly { readonly path: string; readonly code: string }[],
+  idFor: (index: number) => string,
+  now: number,
+  fallback = { path: 'main.cpp', code: '' },
+): FilesWorkspace {
+  const source = entries.length > 0 ? entries : [fallback];
+  const files = source.map((entry, index) => {
+    const path = entry.path;
+    return {
+      id: idFor(index),
+      path,
+      language: languageForPath(path),
+      code: entry.code,
+      updatedAt: now,
+    } satisfies StoredFile;
+  });
+
+  const first = files[0];
+  if (!first) {
+    // `source` is never empty, so this is only to keep the types honest.
+    return initialWorkspace(idFor(0), now, fallback);
+  }
+  return { files, activeId: first.id };
+}

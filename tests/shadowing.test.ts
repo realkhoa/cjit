@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { analyzeSource } from '@/lang/analyze';
 import { execute } from '@/lang/runtime/interpreter';
 import { emptyWatch } from '@/engine/types';
-import { SAMPLE_MAIN_CPP } from '@/examples/sample';
+import { SAMPLE_MAIN_CPP, exampleFiles } from '@/examples/sample';
 import { useAppStore } from '@/state/store';
 import { timelineHighlightFor } from '@/ui/watchSelect';
 
@@ -80,7 +80,7 @@ describe('timelineHighlightFor', () => {  it('highlights the line the selected m
     const { createFastEngine } = await import('@/engine/fastEngine');
     const engine = createFastEngine();
     const snapshot = await engine.watch(
-      { code: SAMPLE_MAIN_CPP, file: 'main.cpp' },
+      { code: SAMPLE_MAIN_CPP, file: 'main.cpp', files: exampleFiles() },
       new AbortController().signal,
     );
 

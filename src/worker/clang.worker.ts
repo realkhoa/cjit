@@ -38,6 +38,7 @@ interface RuntimeLike {
     output: string;
     wasmBytes: number;
     failure?: string;
+    notes?: readonly string[];
   }>;
   readArtifact(sourcePath: string, kind: ArtifactKind): Uint8Array | null;
 }
@@ -126,6 +127,16 @@ async function handleRun(request: ClangRunRequest): Promise<void> {
     });
 
     const diagnostics = parseClangDiagnostics(outcome.output, request.fileName);
+
+    /*
+     * Notes about the build itself - which file became the entry point, what was
+     * skipped because a project runs one main - go down the build channel, where the
+     * console already shows what the toolchain had to say. Prefixed, so it is clear
+     * this is the tool talking and not the program.
+     */
+    for (const note of outcome.notes ?? []) {
+      post({ kind: 'output', requestId, phase: 'build', chunk: `cjit: ${note}\n` });
+    }
 
     // Tell the user once per worker whether the toolchain came off the machine or
     // off the network - this is the difference between a reload costing nothing and

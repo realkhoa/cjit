@@ -870,7 +870,14 @@ class Interpreter {
       return;
     }
 
-    const value = convertTo(binding.type, this.evaluate(initializer));
+    const evaluated = this.evaluate(initializer);
+    // A declaration with `auto` learns its type from the value it is given, the
+    // same way a later assignment does.
+    if (binding.type.kind === 'unknown' && evaluated.kind !== 'uninit' && evaluated.kind !== 'void') {
+      binding.type = evaluated.type;
+    }
+
+    const value = this.valueForType(binding.type, evaluated);
     this.store(binding.type, binding.address, value);
   }
 
@@ -1383,7 +1390,13 @@ class Interpreter {
       case '-':
         if (pointerish) {
           if (isPointerType(right.type)) {
-            const elementSize = Math.max(left.type.pointee?.size ?? 1, 1);
+            const elementSize = Math.max(
+              // Either side can be the one carrying the pointee: `end() - begin()`
+              // and `begin() - end()` both have to divide by the element size, and
+              // an index computed as a byte difference is simply wrong.
+              left.type.pointee?.size ?? right.type.pointee?.size ?? 1,
+              1,
+            );
             return intValue(longType(), ((leftPointer ?? 0) - (rightPointer ?? 0)) / elementSize);
           }
           return this.shiftPointer(left, -toNumber(right), expression);
@@ -2218,11 +2231,14 @@ class Interpreter {
   /**
    * Converts a value for storing as `type`.
    *
-   * A `std::string` needs a real string object built for it: storing the bytes of
-   * a literal instead is the bug that made `vector<string>` unreadable, and map
-   * keys hit exactly the same trap.
+   * Two cases need care. A `std::string` needs a real string object built for it:
+   * storing the bytes of a literal instead is the bug that made `vector<string>`
+   * unreadable, and map keys hit exactly the same trap. And a not-yet-deduced
+   * type (`auto`) must keep the value's own type - coercing a pointer to a number
+   * there silently turns `end() - begin()` into a byte count.
    */
   private valueForType(type: CType, value: Value): Value {
+    if (type.kind === 'unknown') return value;
     if (isStringType(type)) return this.makeString(this.stringTextOf(value));
     return convertTo(type, value);
   }
@@ -2969,6 +2985,8 @@ class Interpreter {
     const supported = new Set([
       'min', 'max', 'abs', 'swap', 'sort', 'reverse', 'distance',
       'to_string', 'stoi', 'stod', 'fabs',
+      'lower_bound', 'upper_bound', 'binary_search', 'accumulate', 'iota',
+      'min_element', 'max_element', 'fill',
     ]);
     if (!name.startsWith('std::') && !supported.has(base)) return undefined;
     if (!supported.has(base)) return undefined;
@@ -3027,9 +3045,131 @@ class Interpreter {
         );
       case 'stod':
         return floatValue(doubleType(), Number.parseFloat(this.plainText(argumentAt(0)).trim()) || 0);
+      case 'lower_bound':
+      case 'upper_bound':
+      case 'binary_search': {
+        const range = this.rangeOf(args, position);
+        const wanted = this.decay(argumentAt(2));
+        // The range is assumed sorted, as the standard requires; the search is a
+        // real binary search rather than a scan, so behaviour matches the library.
+        let low = 0;
+        let high = range.count;
+        let found = false;
+
+        while (low < high) {
+          const middle = (low + high) >> 1;
+          const current = this.load(range.element, range.address + middle * this.strideOf(range.element));
+          const order = this.compareValues(current, wanted);
+          if (order === 0 && base === 'binary_search') found = true;
+          const goRight = base === 'upper_bound' ? order <= 0 : order < 0;
+          if (goRight) low = middle + 1;
+          else high = middle;
+        }
+
+        if (base === 'binary_search') return intValue(intType(), found ? 1 : 0);
+        return pointerValue(range.element, range.address + low * this.strideOf(range.element));
+      }
+      case 'min_element':
+      case 'max_element': {
+        const range = this.rangeOf(args, position);
+        if (range.count === 0) {
+          return pointerValue(range.element, range.address);
+        }
+
+        let best = 0;
+        for (let index = 1; index < range.count; index += 1) {
+          const candidate = this.load(range.element, range.address + index * this.strideOf(range.element));
+          const champion = this.load(range.element, range.address + best * this.strideOf(range.element));
+          const order = this.compareValues(candidate, champion);
+          if (base === 'min_element' ? order < 0 : order > 0) best = index;
+        }
+        return pointerValue(range.element, range.address + best * this.strideOf(range.element));
+      }
+      case 'accumulate': {
+        const range = this.rangeOf(args, position);
+        // `accumulate(begin, end, init)`; a custom operation would be the fourth
+        // argument. Index 2 is the initial value, not an operation.
+        if (args[3]) {
+          throw new RuntimeFault('accumulate with a custom operation is not implemented', position);
+        }
+        if (!isIntegerType(range.element) && !isFloatType(range.element)) {
+          // Summing pairs or strings numerically would quietly produce a wrong
+          // number, which is worse than saying no.
+          throw new RuntimeFault(
+            `accumulate only supports numeric elements, not '${range.element.name}'`,
+            position,
+          );
+        }
+
+        let total = toNumber(this.decay(argumentAt(2)));
+        for (let index = 0; index < range.count; index += 1) {
+          total += toNumber(
+            this.load(range.element, range.address + index * this.strideOf(range.element)),
+          );
+        }
+        const initial = this.decay(argumentAt(2));
+        return isFloatType(initial.type)
+          ? floatValue(initial.type, total)
+          : intValue(initial.type, total);
+      }
+      case 'iota': {
+        const range = this.rangeOf(args, position);
+        let next = toNumber(this.decay(argumentAt(2)));
+        for (let index = 0; index < range.count; index += 1) {
+          this.store(
+            range.element,
+            range.address + index * this.strideOf(range.element),
+            convertTo(range.element, intValue(intType(), next)),
+          );
+          next += 1;
+        }
+        return voidValue();
+      }
+      case 'fill': {
+        const range = this.rangeOf(args, position);
+        const value = this.valueForType(range.element, this.decay(argumentAt(2)));
+        for (let index = 0; index < range.count; index += 1) {
+          this.store(range.element, range.address + index * this.strideOf(range.element), value);
+        }
+        return voidValue();
+      }
       default:
         return undefined;
     }
+  }
+
+  private strideOf(element: CType): number {
+    return Math.max(element.size, 1);
+  }
+
+  /**
+   * The `[begin, end)` range an algorithm works on.
+   *
+   * The algorithms take iterators, which this engine models as pointers - the same
+   * thing `.begin()` and `.end()` hand back for every container.
+   */
+  private rangeOf(
+    args: readonly Expression[],
+    position: SourcePos,
+  ): { readonly address: number; readonly count: number; readonly element: CType } {
+    const first = args[0];
+    const second = args[1];
+    if (!first || !second) {
+      throw new RuntimeFault('this algorithm needs a begin and an end', position);
+    }
+
+    const fromValue = this.decay(this.evaluateRaw(first));
+    const toValue = this.decay(this.evaluateRaw(second));
+    const element =
+      fromValue.type.pointee ?? toValue.type.pointee ?? fromValue.type.element ?? toValue.type.element;
+    if (!element) {
+      throw new RuntimeFault('cannot tell what this range holds', position);
+    }
+
+    const from = toPointerAddress(fromValue) ?? 0;
+    const to = toPointerAddress(toValue) ?? 0;
+    const stride = Math.max(element.size, 1);
+    return { address: from, count: Math.max(Math.floor((to - from) / stride), 0), element };
   }
 
   private sortRange(args: readonly Expression[], position: SourcePos, reverse: boolean): void {

@@ -110,6 +110,37 @@ function ensureDirectories(memfs: MemFs, filePath: string, created: Set<string>)
 
 export type BuildStage = 'ok' | 'load' | 'compile' | 'link' | 'run';
 
+/**
+ * Whether this source defines `main`, as opposed to declaring it or mentioning the
+ * word. Deliberately a light scan: the linker stays the authority, and this only
+ * decides which files are offered as the entry point.
+ */
+export function definesMain(code: string): boolean {
+  // Comments first: a commented-out `int main() { ... }` is not an entry point, and
+  // a scan that ignores this reports a program where there is none.
+  const source = code.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+
+  const pattern = /\bmain\s*\(/g;
+  for (let match = pattern.exec(source); match !== null; match = pattern.exec(source)) {
+    // Walk to the matching ')' so `int main(int argc, char** argv) {` is handled.
+    let depth = 0;
+    let index = match.index + match[0].length - 1;
+    for (; index < source.length; index += 1) {
+      const character = source[index];
+      if (character === '(') depth += 1;
+      else if (character === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+
+    const rest = source.slice(index + 1);
+    // A definition opens a body; a declaration ends in ';'.
+    if (/^\s*\{/.test(rest)) return true;
+  }
+  return false;
+}
+
 export interface BuildOutcome {
   /** Process exit status, or null when it could not be determined. */
   readonly exitCode: number | null;
@@ -118,6 +149,8 @@ export interface BuildOutcome {
   readonly output: string;
   readonly wasmBytes: number;
   readonly failure?: string;
+  /** Things the user should know about the build itself, not the program's output. */
+  readonly notes?: readonly string[];
 }
 
 export interface ClangRuntime {
@@ -239,7 +272,35 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
     // The active file first, so its diagnostics are the first ones reported.
     const others = (request.files ?? []).filter((file) => file.path !== request.fileName);
     const sources: WorkspaceFile[] = [{ path: request.fileName, code: request.code }, ...others];
-    const units = sources.filter((file) => isTranslationUnit(file.path));
+    const allUnits = sources.filter((file) => isTranslationUnit(file.path));
+
+    /*
+     * One entry point per project.
+     *
+     * Every file may be a program - the bundled project ships main.cpp and hello.c -
+     * and linking two `main`s fails with a duplicate-symbol error that explains
+     * nothing. The open file wins when it is a program (that is the one the user is
+     * looking at), otherwise the first one that is; the rest are reported, not
+     * silently dropped.
+     */
+    const programs = allUnits.filter((file) => definesMain(file.code));
+    const entry = programs.find((file) => file.path === request.fileName) ?? programs[0];
+    const units = entry ? allUnits.filter((file) => file === entry || !definesMain(file.code)) : allUnits;
+    const notes: string[] = [];
+    const skipped = allUnits.filter((file) => !units.includes(file));
+
+    if (skipped.length > 0) {
+      notes.push(
+        `entry point: ${entry?.path ?? '?'} — bỏ qua ${skipped
+          .map((file) => file.path)
+          .join(', ')} (mỗi project chỉ chạy một main; mở file đó rồi Run nếu muốn chạy nó)`,
+      );
+    }
+    if (programs.length === 0) {
+      notes.push(
+        'không file nào định nghĩa main — Run cần một entry point; thêm int main() vào file đang mở',
+      );
+    }
 
     const consoleLog = console.log;
     console.log = () => undefined;
@@ -325,6 +386,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
         stage: 'ok',
         output,
         wasmBytes: binary.byteLength,
+        notes,
       };
     } catch (error) {
       // clang/lld exit through a thrown ProcExit that carries the status code; a
@@ -335,6 +397,7 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
         exitCode,
         stage,
         output,
+        notes,
         wasmBytes: 0,
         failure: error instanceof Error ? error.message : String(error),
       };

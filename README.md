@@ -185,9 +185,34 @@ Sửa kèm hai bug thật mà việc này phơi ra:
   interpreter (string literal, vector, argv), nên chương trình `int main(void){ return 0; }` cũng "rò rỉ". Giờ chỉ
   cấp phát do chương trình yêu cầu mới tính.
 
-### Console: 4 tab, gồm Runtime issues
+### STL trong fast engine (pane Watch, debounce 1s)
 
-`Output` · `Problems` · **`Runtime`** · `Stdin`. Tab **Runtime** gom những gì chương trình làm mà compiler chấp
+| Nhóm | Có gì |
+|---|---|
+| Container | `std::vector`, `std::set`, `std::map`, `std::pair`, `std::queue`, `std::stack`, `std::deque`, `std::priority_queue` |
+| Method | `size/empty/clear/begin/end`; set+map: `insert/emplace/erase/count/contains/find/at`; map: `m[k]` **find-or-insert**; queue/stack/deque: `push/pop/front/back/top/push_front/pop_front/at`; priority_queue: `push/pop/top` (max-heap thật) |
+| Algorithm | `sort`, `reverse`, `swap`, `fill`, `iota`, `accumulate`, `binary_search`, `lower_bound`, `upper_bound`, `min_element`, `max_element`, `distance`, `min`, `max`, `abs/fabs` |
+| String | `to_string`, `stoi`, `stod`, `substr`, `find`, `size`, `empty`, `append`, `c_str`, `compare` |
+
+Hiển thị theo đúng một quy tắc: **tối đa 20 phần tử**, phần còn lại ghi `+N more`. Vector/queue/stack/deque/priority_queue đọc dạng `[..]`, set dạng
+`{1, 2, 3}`, map dạng `{key: value}`, pair dạng `(first, second)`. Mọi container **dùng chung control block với vector**, nên `v[i]`, range-for,
+`size()`, tab Memory và pane Watch hoạt động cho tất cả mà không có ngoại lệ riêng.
+
+`std::accumulate` **từ chối** phần tử không phải số (ví dụ cộng các pair của map) thay vì trả về một con số vô nghĩa. `accumulate` với custom
+operation thì báo chưa hỗ trợ.
+
+### Project: nhiều file, một entry point
+
+Default workspace là **cả project**: `main.cpp` (tour STL: container, algorithm, string, template), `util.h` (module có `#pragma once`, không có
+`main`) và `hello.c` (printf trong vòng lặp). File mới tạo cũng theo đúng hình đó: `#pragma once`, không `main`.
+
+**Một project chạy một `main`.** Run chọn entry point: **file đang mở thắng** nếu nó là chương trình, ngược lại file đầu tiên có `main`; những file
+`main` còn lại **bị bỏ qua và được báo rõ** trên console (`cjit: entry point: main.cpp — bỏ qua hello.c …`). Project không có `main` nào thì cũng
+được nói thẳng thay vì để lld báo `undefined symbol`.
+
+### Console: các tab, gồm Runtime issues và Memory
+
+`Output` · `Problems` · **`Runtime`** · **`Memory`** · `Stdin`. Tab **Runtime** gom những gì chương trình làm mà compiler chấp
 nhận nhưng debugger sẽ dừng lại:
 
 | Loại | Ví dụ |
