@@ -24,6 +24,12 @@ import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
 import type { EditorSettings } from '@/state/settings';
 import { isMobileViewport } from '@/ui/responsive';
 import type { PaneId } from '@/ui/responsive';
+import {
+  clampTimelineIndex,
+  entryIndexFor,
+  isTimelineAtEnd,
+  stepTimeline,
+} from '@/ui/timeline';
 import type { WatchMode } from '@/ui/watchSelect';
 import {
   decodeShare,
@@ -122,10 +128,16 @@ export interface AppState {
    */
   readonly watchMode: WatchMode;
   readonly timelineIndex: number;
+  /** Playing walks the recorded moments on its own, and stops at the end. */
+  readonly timelinePlaying: boolean;
 
   setMobilePane(pane: PaneId): void;
   setWatchMode(mode: WatchMode): void;
   setTimelineIndex(index: number): void;
+  /** Moves `delta` recorded moments; enters timeline mode if it was not already. */
+  stepTimeline(delta: number): void;
+  setTimelinePlaying(playing: boolean): void;
+  toggleTimelinePlayback(): void;
   setCodeFromEditor(code: string): void;
   loadExample(path: string, language: FileLanguage, code: string): void;
   createFile(): void;
@@ -235,6 +247,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   mobilePane: 'code',
   watchMode: 'cursor',
   timelineIndex: 0,
+  timelinePlaying: false,
 
   setCodeFromEditor(code) {
     const { files, activeFileId } = get();
@@ -435,8 +448,44 @@ export const useAppStore = create<AppState>()((set, get) => ({
   setTimelineIndex(index) {
     // The history shrinks when the code changes, so the index is clamped here as
     // well as when it is read.
-    const last = Math.max(get().watch.history.length - 1, 0);
-    set({ timelineIndex: Math.min(Math.max(Math.trunc(index), 0), last) });
+    set({ timelineIndex: clampTimelineIndex(get().watch.history.length, index) });
+  },
+
+  stepTimeline(delta) {
+    const { watch, watchMode, timelineIndex } = get();
+    const historyLength = watch.history.length;
+
+    // Entering the timeline by stepping: forward starts at the beginning (walking
+    // the run), backward starts at the end (walking back from what just happened).
+    const from =
+      watchMode === 'timeline' ? timelineIndex : entryIndexFor(historyLength, delta);
+
+    set({
+      watchMode: 'timeline',
+      timelineIndex: stepTimeline(historyLength, from, delta),
+    });
+  },
+
+  setTimelinePlaying(playing) {
+    set({ timelinePlaying: playing });
+  },
+
+  toggleTimelinePlayback() {
+    const { timelinePlaying, watch, timelineIndex } = get();
+    if (timelinePlaying) {
+      set({ timelinePlaying: false });
+      return;
+    }
+
+    const historyLength = watch.history.length;
+    if (historyLength === 0) return;
+
+    set({
+      watchMode: 'timeline',
+      timelinePlaying: true,
+      // Playing from the end would end immediately, so replay from the start.
+      timelineIndex: isTimelineAtEnd(historyLength, timelineIndex) ? 0 : timelineIndex,
+    });
   },
 
   toggleInlineValues() {

@@ -156,6 +156,12 @@ Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu v
 
 ### M3: đọc dữ liệu chương trình
 
+- **Timeline như một debugger (replay)**: trong chế độ Timeline có transport `⏮ ◀ ▶/⏸ ▶ ⏭` — step tiến/lùi
+  (clamp ở hai đầu, không wrap), play tự chạy qua các mốc rồi **dừng ở cuối**, và `3/12` cho biết đang ở đâu.
+  Phím tắt **F10 / Shift+F10 / Ctrl+F10** (play-pause) cùng command palette; mọi nút đều disabled khi chưa có
+  history. Editor vẫn highlight + cuộn tới dòng của mốc đang chọn.
+  Nói cho đúng: đây là **replay bản ghi** — chương trình đã chạy xong, ta đi lại qua những gì interpreter đã ghi
+  lại, **không phải** dừng một tiến trình đang chạy. Nhãn trong palette ghi rõ "recorded moment".
 - **Inline value overlay**: sau mỗi dòng đã chạy, Monaco hiện `// total = 6` ngay cuối dòng. Dòng nào **tạo
   ra/thay đổi** biến thì hiện đúng biến đó (tối đa 3 tên + `(+k)`); dòng không đổi gì (`printf`, `return`,
   `if`) thì hiện **biến đang trong scope**, mờ hơn — nên hầu như dòng nào cũng đọc được giá trị, giống inline

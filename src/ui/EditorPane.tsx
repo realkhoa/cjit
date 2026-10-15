@@ -120,6 +120,29 @@ export function EditorPane() {
       keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F5],
       run: () => useAppStore.getState().stop(),
     });
+    /*
+     * Timeline stepping. F10 / Shift+F10 are the debugging keys people already
+     * have in their fingers; the labels say "recorded moment" because this replays
+     * what the interpreter recorded, it does not stop a running process.
+     */
+    editor.addAction({
+      id: 'cjit.timelineStepForward',
+      label: 'C/C++ Studio: Timeline step forward (recorded moment)',
+      keybindings: [monaco.KeyCode.F10],
+      run: () => useAppStore.getState().stepTimeline(1),
+    });
+    editor.addAction({
+      id: 'cjit.timelineStepBack',
+      label: 'C/C++ Studio: Timeline step back (recorded moment)',
+      keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.F10],
+      run: () => useAppStore.getState().stepTimeline(-1),
+    });
+    editor.addAction({
+      id: 'cjit.timelinePlay',
+      label: 'C/C++ Studio: Play or pause the timeline',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F10],
+      run: () => useAppStore.getState().toggleTimelinePlayback(),
+    });
     editor.addAction({
       id: 'cjit.newFile',
       label: 'C/C++ Studio: New file',

@@ -9,6 +9,7 @@ import { TitleBar } from '@/ui/TitleBar';
 import { Toolbar } from '@/ui/Toolbar';
 import { WatchPane } from '@/ui/WatchPane';
 import { useIsMobile } from '@/ui/useIsMobile';
+import { useTimelinePlayback } from '@/ui/useTimelinePlayback';
 import { useAppStore } from '@/state/store';
 import {
   MAX_BOTTOM_PERCENT,
@@ -32,6 +33,8 @@ export function App() {
   const setBottomPercent = useAppStore((state) => state.setBottomPercent);
   const setExplorerWidth = useAppStore((state) => state.setExplorerWidth);
   const isMobile = useIsMobile();
+  // Playback is driven from the shell, so it keeps running whichever pane is shown.
+  useTimelinePlayback();
 
   // Negative sign: dragging the divider right/up makes the fixed pane smaller.
   const handleRightDelta = useCallback(

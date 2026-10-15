@@ -5,6 +5,7 @@ import { IterationsDialog } from '@/ui/IterationsDialog';
 import { buildIterationTable, hasIterations } from '@/ui/iterationTable';
 import { overallTone, pillClass, watchStatusLabel } from '@/ui/status';
 import { selectWatchView } from '@/ui/watchSelect';
+import { timelinePositionLabel } from '@/ui/timeline';
 
 function VarRows({ nodes, depth }: { readonly nodes: readonly VarNode[]; readonly depth: number }) {
   return (
@@ -50,6 +51,9 @@ export function WatchPane() {
   const historyIndex = useAppStore((state) => state.timelineIndex);
   const setMode = useAppStore((state) => state.setWatchMode);
   const setHistoryIndex = useAppStore((state) => state.setTimelineIndex);
+  const stepTimeline = useAppStore((state) => state.stepTimeline);
+  const timelinePlaying = useAppStore((state) => state.timelinePlaying);
+  const toggleTimelinePlayback = useAppStore((state) => state.toggleTimelinePlayback);
 
   const tone = overallTone(runState, analysisState, watch.status);
   const view = selectWatchView(watch, { mode, cursorLine, historyIndex });
@@ -102,6 +106,63 @@ export function WatchPane() {
 
       {mode === 'timeline' ? (
         <div className="timeline">
+          <div className="timeline__transport" role="group" aria-label="Timeline playback">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setHistoryIndex(0)}
+              disabled={watch.history.length === 0}
+              aria-label="First moment"
+              title="Về mốc đầu tiên"
+            >
+              ⏮
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => stepTimeline(-1)}
+              disabled={watch.history.length === 0}
+              aria-label="Step back"
+              title="Lùi một mốc (Shift+F10)"
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              className={timelinePlaying ? 'icon-btn icon-btn--active' : 'icon-btn'}
+              onClick={toggleTimelinePlayback}
+              disabled={watch.history.length === 0}
+              aria-label={timelinePlaying ? 'Pause playback' : 'Play timeline'}
+              title={
+                timelinePlaying
+                  ? 'Tạm dừng'
+                  : 'Tự chạy qua các mốc đã ghi (Ctrl+F10). Đây là replay bản ghi, không phải dừng chương trình đang chạy.'
+              }
+            >
+              {timelinePlaying ? '⏸' : '▶'}
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => stepTimeline(1)}
+              disabled={watch.history.length === 0}
+              aria-label="Step forward"
+              title="Tiến một mốc (F10)"
+            >
+              ▶
+            </button>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setHistoryIndex(lastHistoryIndex)}
+              disabled={watch.history.length === 0}
+              aria-label="Last moment"
+              title="Tới mốc cuối cùng"
+            >
+              ⏭
+            </button>
+          </div>
+
           <input
             type="range"
             className="timeline__slider"
@@ -114,9 +175,7 @@ export function WatchPane() {
             onChange={(event) => setHistoryIndex(Number.parseInt(event.target.value, 10))}
           />
           <span className="timeline__position">
-            {watch.history.length === 0
-              ? 'no history'
-              : `${Math.min(historyIndex, lastHistoryIndex) + 1}/${watch.history.length}`}
+            {timelinePositionLabel(watch.history.length, historyIndex)}
           </span>
         </div>
       ) : null}

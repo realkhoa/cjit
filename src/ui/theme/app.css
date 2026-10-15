@@ -957,6 +957,19 @@ button {
   flex: 0 0 auto;
 }
 
+.timeline__transport {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* The pause button reads as "running", not as another neutral control. */
+.icon-btn--active {
+  background: var(--vs-selection);
+  color: var(--vs-accent);
+}
+
 .timeline__slider {
   flex: 1 1 auto;
   min-width: 40px;
