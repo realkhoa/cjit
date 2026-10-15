@@ -265,8 +265,127 @@ export function stringType(): CType {
   };
 }
 
+/**
+ * The containers the engine simulates.
+ *
+ * All of them share the vector's control block, because that is what lets one set
+ * of primitives - indexed access, range-based for, `.size()`, the watch pane's
+ * element listing - work for every container instead of seven special cases.
+ * `map` stores `std::pair<K, V>` elements kept ordered by key, which is what makes
+ * `m[k]`, iteration and the `{key: value}` display fall out of the same machinery.
+ */
+export type ContainerKind =
+  | 'vector'
+  | 'set'
+  | 'map'
+  | 'queue'
+  | 'stack'
+  | 'deque'
+  | 'priority-queue';
+
+const CONTAINER_KINDS: readonly (readonly [string, ContainerKind])[] = [
+  ['priority_queue', 'priority-queue'],
+  ['vector', 'vector'],
+  ['set', 'set'],
+  ['map', 'map'],
+  ['queue', 'queue'],
+  ['stack', 'stack'],
+  ['deque', 'deque'],
+];
+
+export function containerKindOf(type: CType): ContainerKind | null {
+  if (type.kind !== 'struct') return null;
+  for (const [name, kind] of CONTAINER_KINDS) {
+    if (type.name === `std::${name}` || type.name.startsWith(`std::${name}<`)) return kind;
+  }
+  return null;
+}
+
+export function pairType(first: CType, second: CType): CType {
+  const firstSize = Math.max(first.size, 1);
+  const offset = alignUp(firstSize, alignOf(second));
+  const size = alignUp(offset + Math.max(second.size, 1), Math.max(alignOf(first), alignOf(second)));
+  return {
+    kind: 'struct',
+    name: `std::pair<${first.name}, ${second.name}>`,
+    size,
+    signed: false,
+    bits: 0,
+
+    members: [
+      { name: 'first', offset: 0, type: first },
+      { name: 'second', offset, type: second },
+    ],
+  };
+}
+
+export function isPairType(type: CType): boolean {
+  return type.kind === 'struct' && type.name.startsWith('std::pair<');
+}
+
+/** Key and value of a map's element type, or null when it is not a pair. */
+export function pairParts(type: CType): { readonly key: CType; readonly value: CType } | null {
+  if (!isPairType(type)) return null;
+  const first = type.members?.[0]?.type;
+  const second = type.members?.[1]?.type;
+  return first && second ? { key: first, value: second } : null;
+}
+
+function containerType(name: string, element: CType, displayName?: string): CType {
+  const base = vectorType(element);
+  return { ...base, name: `std::${name}<${displayName ?? element.name}>` };
+}
+
 export function isVectorType(type: CType): boolean {
   return type.kind === 'struct' && type.name.startsWith('std::vector<');
+}
+
+export function setType(element: CType): CType {
+  return containerType('set', element);
+}
+
+export function mapType(key: CType, value: CType): CType {
+  return containerType('map', pairType(key, value), `${key.name}, ${value.name}`);
+}
+
+export function queueType(element: CType): CType {
+  return containerType('queue', element);
+}
+
+export function stackType(element: CType): CType {
+  return containerType('stack', element);
+}
+
+export function dequeType(element: CType): CType {
+  return containerType('deque', element);
+}
+
+export function priorityQueueType(element: CType): CType {
+  return containerType('priority_queue', element);
+}
+
+/**
+ * Splits `int, std::pair<int, int>` on the commas that separate template
+ * arguments, leaving the ones nested inside further template arguments alone.
+ */
+export function splitTemplateArguments(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = '';
+
+  for (const character of text) {
+    if (character === '<') depth += 1;
+    else if (character === '>') depth -= 1;
+    else if (character === ',' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += character;
+  }
+
+  if (current.trim().length > 0 || parts.length > 0) parts.push(current);
+  return parts;
 }
 
 export function isStringType(type: CType): boolean {
@@ -476,12 +595,43 @@ export class TypeResolver {
     if (enumType) return enumType;
 
     // C++ containers the engine resolves itself, so no diagnostic is needed.
-    const vectorMatch = /^(?:std::)?vector\s*<(.+)>$/.exec(name);
-    const element = vectorMatch?.[1];
-    if (element !== undefined) {
-      const resolved = this.resolveByName(element.trim(), depth + 1);
-      return vectorType(resolved);
+    const containerMatch = /^(?:std::)?(vector|set|map|queue|stack|deque|priority_queue)\s*<(.+)>$/.exec(
+      name,
+    );    if (containerMatch) {
+      const containerName = containerMatch[1] ?? 'vector';
+      const argumentText = containerMatch[2] ?? 'int';
+      const args = splitTemplateArguments(argumentText);
+
+      if (containerName === 'map') {
+        const key = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
+        const value = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
+        return mapType(key, value);
+      }
+
+      const resolved = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
+      switch (containerName) {
+        case 'set':
+          return setType(resolved);
+        case 'queue':
+          return queueType(resolved);
+        case 'stack':
+          return stackType(resolved);
+        case 'deque':
+          return dequeType(resolved);
+        case 'priority_queue':
+          return priorityQueueType(resolved);
+        default:
+          return vectorType(resolved);
+      }
     }
+    const pairMatch = /^(?:std::)?pair\s*<(.+)>$/.exec(name);
+    if (pairMatch) {
+      const args = splitTemplateArguments(pairMatch[1] ?? 'int, int');
+      const first = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
+      const second = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
+      return pairType(first, second);
+    }
+
     if (name === 'std::string' || name === 'string') return stringType();
     if (name === 'std::ostream' || name === 'std::istream' || name === 'std::iostream') {
       return { kind: 'unknown', name, size: 1, signed: false, bits: 8 };

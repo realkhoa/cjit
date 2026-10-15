@@ -14,13 +14,16 @@ import {
   VOID_TYPE,
   alignOf,
   arrayOf,
+  containerKindOf,
   elementKindCode,
   elementTypeFromCode,
   isFloatType,
   isIntegerType,
   isPointerType,
+  isPairType,
   isStringType,
   isVectorType,
+  pairParts,
   pointerTo,
 } from '@/lang/ctype';
 import type { CType } from '@/lang/ctype';
@@ -826,15 +829,15 @@ class Interpreter {
 
   private initialize(binding: Binding, initializer: Expression): void {
     // C++ containers have their own construction rules.
-    if (isVectorType(binding.type)) {
+    if (containerKindOf(binding.type) !== null) {
       if (initializer.kind === 'init-list') {
-        this.createVector(binding.type, binding.address, initializer.items);
+        this.createContainer(binding.type, binding.address, initializer.items);
       } else {
         const source = this.evaluate(initializer);
         if (isVectorType(source.type) && source.kind === 'aggregate') {
           this.copyVector(source.address, source.type, binding.address, binding.type);
         } else {
-          this.createVector(binding.type, binding.address, []);
+          this.createContainer(binding.type, binding.address, []);
         }
       }
       return;
@@ -898,7 +901,7 @@ class Interpreter {
           this.initializeAggregate(member.type, memberAddress, item.items);
           return;
         }
-        this.store(member.type, memberAddress, convertTo(member.type, this.evaluate(item)));
+        this.store(member.type, memberAddress, this.valueForType(member.type, this.evaluate(item)));
       });
       return;
     }
@@ -1537,7 +1540,10 @@ class Interpreter {
         const address = this.pointerAddressOf(raw);
         value = { kind: 'pointer', type: target.type, address: address ?? 0 };
       } else {
-        value = convertTo(target.type, raw);
+        // `valueForType` rather than `convertTo`: a `std::string` target must be
+        // built from the text, and `convertTo` would decay a char array into a
+        // pointer read out of its own bytes.
+        value = this.valueForType(target.type, raw);
       }
     } else {
       const current = this.load(target.type, target.address);
@@ -1670,6 +1676,40 @@ class Interpreter {
 
     if (base.kind === 'aggregate' && base.type.kind === 'array' && base.type.element) {
       return { address: base.address + index * Math.max(base.type.element.size, 1), type: base.type.element };
+    }
+
+    // A map is indexed by key, not by position: `m[k]` finds the entry or inserts
+    // a zero value for it, which is what makes `m[k] = v` and `m[k]++` work.
+    if (base.kind === 'aggregate' && containerKindOf(base.type) === 'map') {
+      const element = this.vectorElement(base.address, base.type);
+      const parts = pairParts(element);
+      const valueOffset = element.members?.[1]?.offset ?? 0;
+      if (!parts) throw new RuntimeFault('std::map without a pair element type', expression.start);
+
+      const key = this.valueForType(parts.key, this.evaluate(expression.index));
+      const at = this.sequenceFindKey(base.address, base.type, key);
+      if (at.found) {
+        const entry = this.sequenceElement(base.address, base.type, at.index);
+        if (entry.kind !== 'aggregate') {
+          throw new RuntimeFault('malformed std::map entry', expression.start);
+        }
+        return { address: entry.address + valueOffset, type: parts.value };
+      }
+
+      const pair = this.createPair(
+        element,
+        key,
+        this.valueForType(parts.value, intValue(intType(), 0)),
+      );
+      this.sequenceInsertAt(base.address, base.type, at.index, pair);
+
+      // The entry has been copied into the sequence, so the address handed back
+      // must be the one *in* the sequence - not the temporary pair's.
+      const inserted = this.sequenceElement(base.address, base.type, at.index);
+      if (inserted.kind !== 'aggregate') {
+        throw new RuntimeFault('malformed std::map entry', expression.start);
+      }
+      return { address: inserted.address + valueOffset, type: parts.value };
     }
 
     // C++ containers: element 0 lives at the data pointer, not at the control block.
@@ -2149,6 +2189,227 @@ class Interpreter {
     this.memory.writeInt32(address + VECTOR_ELEMENT_SIZE_OFFSET, elementSize);
   }
 
+  /**
+   * Builds any of the simulated containers.
+   *
+   * They all start as a vector, then take on the shape their contract requires:
+   * a set is sorted and uniqued, a map is sorted by key, a priority_queue is a
+   * heap. That is what lets the watch pane, range-based for and indexed access go
+   * on working unchanged.
+   */
+  private createContainer(type: CType, address: number, items: readonly Expression[]): void {
+    this.createVector(type, address, items);
+
+    switch (containerKindOf(type)) {
+      case 'set':
+        this.sequenceSort(address, type, true);
+        return;
+      case 'map':
+        this.sequenceSort(address, type, false);
+        return;
+      case 'priority-queue':
+        this.heapifySequence(address, type);
+        return;
+      default:
+        return;
+    }
+  }
+
+  /**
+   * Converts a value for storing as `type`.
+   *
+   * A `std::string` needs a real string object built for it: storing the bytes of
+   * a literal instead is the bug that made `vector<string>` unreadable, and map
+   * keys hit exactly the same trap.
+   */
+  private valueForType(type: CType, value: Value): Value {
+    if (isStringType(type)) return this.makeString(this.stringTextOf(value));
+    return convertTo(type, value);
+  }
+
+  /** Builds a `std::pair` value in memory, for `m.insert({k, v})` and friends. */
+  private createPair(
+    pairType: CType,
+    key: Value,
+    value: Value,
+  ): Extract<Value, { kind: 'aggregate' }> {
+    const address = this.builtinAlloc(Math.max(pairType.size, 1));
+    const first = pairType.members?.[0];
+    const second = pairType.members?.[1];
+    if (first) this.store(first.type, address + first.offset, key);
+    if (second) this.store(second.type, address + second.offset, value);
+    return { kind: 'aggregate', type: pairType, address };
+  }
+
+  /** Ordering used by the associative containers and the heap. */
+  private compareValues(left: Value, right: Value): number {
+    if (
+      left.kind === 'aggregate' &&
+      isStringType(left.type) &&
+      right.kind === 'aggregate' &&
+      isStringType(right.type)
+    ) {
+      const a = this.stringText(left.address);
+      const b = this.stringText(right.address);
+      return a < b ? -1 : a > b ? 1 : 0;
+    }
+    const a = toNumber(left);
+    const b = toNumber(right);
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+
+  /** Reads element `index` of a sequence container. */
+  private sequenceElement(address: number, type: CType, index: number): Value {
+    const element = this.vectorElement(address, type);
+    const data = this.memory.readUint64(address);
+    return this.load(element, data + index * Math.max(element.size, 1));
+  }
+
+  private sequenceSize(address: number): number {
+    return this.memory.readInt64(address + VECTOR_COUNT_OFFSET);
+  }
+
+  /** Sorts in place (by key for a map, by value otherwise); `unique` for a set. */
+  private sequenceSort(address: number, type: CType, unique: boolean): void {
+    const element = this.vectorElement(address, type);
+    const count = this.sequenceSize(address);
+    if (count < 2) return;
+
+    const items: Value[] = [];
+    for (let index = 0; index < count; index += 1) items.push(this.sequenceElement(address, type, index));
+
+    // A map's element is a pair: ordering by key is what `m[k]` relies on.
+    const parts = pairParts(element);
+    const keyOf = (value: Value): Value =>
+      parts && value.kind === 'aggregate' ? this.load(parts.key, value.address) : value;
+
+    items.sort((left, right) => this.compareValues(keyOf(left), keyOf(right)));
+
+    const kept: Value[] = [];
+    for (const item of items) {
+      const previous = kept[kept.length - 1];
+      if (unique && previous && this.compareValues(keyOf(previous), keyOf(item)) === 0) continue;
+      if (
+        !unique &&
+        previous &&
+        parts &&
+        this.compareValues(keyOf(previous), keyOf(item)) === 0
+      ) {
+        // `m[k] = v` written twice keeps the last value; inserting the same key
+        // again in C++ leaves the first. Keeping the first matches the standard.
+        continue;
+      }
+      kept.push(item);
+    }
+
+    this.sequenceTruncate(address, 0);
+    for (const item of kept) this.vectorPush(address, type, item);
+  }
+
+  /** Empties a sequence without freeing it: the control block keeps its buffer. */
+  private sequenceTruncate(address: number, keep: number): void {
+    this.memory.writeInt64(address + VECTOR_COUNT_OFFSET, Math.max(keep, 0));
+  }
+
+  /** Inserts at `index`, shifting the rest right. */
+  private sequenceInsertAt(address: number, type: CType, index: number, value: Value): void {
+    const element = this.vectorElement(address, type);
+    const stride = Math.max(element.size, 1);
+    const size = this.sequenceSize(address);
+
+    this.vectorPush(address, type, value);
+    const data = this.memory.readUint64(address);
+
+    for (let position = size - 1; position >= index; position -= 1) {
+      this.memory.copy(data + position * stride, data + (position + 1) * stride, stride);
+    }
+    this.store(element, data + index * stride, value);
+  }
+
+  /** Removes element `index`, shifting the rest left. */
+  private sequenceRemoveAt(address: number, type: CType, index: number): void {
+    const element = this.vectorElement(address, type);
+    const stride = Math.max(element.size, 1);
+    const size = this.sequenceSize(address);
+    if (index < 0 || index >= size) return;
+
+    const data = this.memory.readUint64(address);
+    for (let position = index; position < size - 1; position += 1) {
+      this.memory.copy(data + (position + 1) * stride, data + position * stride, stride);
+    }
+    this.memory.writeInt64(address + VECTOR_COUNT_OFFSET, size - 1);
+  }
+
+  /**
+   * Where `key` belongs among the elements: the index of a match, or the index a
+   * new key should be inserted at to keep the order.
+   */
+  private sequenceFindKey(
+    address: number,
+    type: CType,
+    key: Value,
+  ): { readonly index: number; readonly found: boolean } {
+    const element = this.vectorElement(address, type);
+    const parts = pairParts(element);
+    const count = this.sequenceSize(address);
+
+    let low = 0;
+    let high = count - 1;
+    while (low <= high) {
+      const middle = (low + high) >> 1;
+      const candidate = this.sequenceElement(address, type, middle);
+      const candidateKey = parts && candidate.kind === 'aggregate' ? this.load(parts.key, candidate.address) : candidate;
+      const order = this.compareValues(candidateKey, key);
+      if (order === 0) return { index: middle, found: true };
+      if (order < 0) low = middle + 1;
+      else high = middle - 1;
+    }
+    return { index: low, found: false };
+  }
+
+  /** Restores the max-heap property over a sequence. */
+  private heapifySequence(address: number, type: CType): void {
+    const count = this.sequenceSize(address);
+    for (let start = Math.floor(count / 2) - 1; start >= 0; start -= 1) {
+      this.siftDown(address, type, start, count);
+    }
+  }
+
+  private siftDown(address: number, type: CType, start: number, count: number): void {
+    const element = this.vectorElement(address, type);
+    const stride = Math.max(element.size, 1);
+    const data = this.memory.readUint64(address);
+
+    let root = start;
+    for (;;) {
+      const left = root * 2 + 1;
+      if (left >= count) return;
+      let largest = left;
+      const right = left + 1;
+      if (right < count && this.compareValues(
+        this.load(element, data + right * stride),
+        this.load(element, data + left * stride),
+      ) > 0) {
+        largest = right;
+      }
+      if (
+        this.compareValues(
+          this.load(element, data + largest * stride),
+          this.load(element, data + root * stride),
+        ) <= 0
+      ) {
+        return;
+      }
+      // Swapped through values, not through a scratch slot: writing past the live
+      // elements would be outside the allocation.
+      const parent = this.load(element, data + root * stride);
+      const child = this.load(element, data + largest * stride);
+      this.store(element, data + root * stride, child);
+      this.store(element, data + largest * stride, parent);
+      root = largest;
+    }
+  }
+
   private copyVector(
     sourceAddress: number,
     sourceType: CType,
@@ -2266,6 +2527,18 @@ class Interpreter {
       const element = this.vectorElement(value.address, value.type);
       return {
         length: this.memory.readInt64(value.address + 8),
+        element,
+        data: this.memory.readUint64(value.address),
+        stride: Math.max(element.size, 1),
+      };
+    }
+
+    // Every simulated container shares the vector's layout, so range-based for
+    // walks a map or a queue exactly the way it walks a vector.
+    if (value.kind === 'aggregate' && containerKindOf(value.type) !== null) {
+      const element = this.vectorElement(value.address, value.type);
+      return {
+        length: this.sequenceSize(value.address),
         element,
         data: this.memory.readUint64(value.address),
         stride: Math.max(element.size, 1),
@@ -2441,6 +2714,203 @@ class Interpreter {
           return voidValue();
         default:
           throw new RuntimeFault(`std::vector has no member '${property}'`, position);
+      }
+    }
+
+    const containerKind = object.kind === 'aggregate' ? containerKindOf(object.type) : null;
+    if (object.kind === 'aggregate' && containerKind && containerKind !== 'vector') {
+      const address = object.address;
+      const type = object.type;
+      const element = this.vectorElement(address, type);
+      const size = this.sequenceSize(address);
+
+      const argumentAt = (index: number): Value =>
+        args[index] ? this.evaluateRaw(args[index] as Expression) : intValue(intType(), 0);
+
+      switch (property) {
+        case 'size':
+        case 'length':
+          return intValue(longType(), size);
+        case 'empty':
+          return intValue(intType(), size === 0 ? 1 : 0);
+        case 'clear':
+          this.sequenceTruncate(address, 0);
+          return voidValue();
+        case 'begin':
+          return pointerValue(element, this.memory.readUint64(address));
+        case 'end':
+          return pointerValue(element, this.memory.readUint64(address) + size * Math.max(element.size, 1));
+        default:
+          break;
+      }
+
+      // ---- set<K> and map<K, V>
+      if (containerKind === 'set' || containerKind === 'map') {
+        const parts = pairParts(element);
+        const keyType = parts?.key ?? element;
+        const keyOfArgument = (value: Value): Value =>
+          parts && value.kind === 'aggregate' && value.type.kind === 'struct' && value.type.name === element.name
+            ? this.load(parts.key, value.address)
+            : this.valueForType(keyType, value);
+
+        switch (property) {
+          case 'insert': {
+            const value = argumentAt(0);
+            if (containerKind === 'map') {
+              if (value.kind === 'aggregate' && parts) {
+                const key = this.load(parts.key, value.address);
+                const mapped = this.load(parts.value, value.address);
+                const at = this.sequenceFindKey(address, type, key);
+                if (!at.found) this.sequenceInsertAt(address, type, at.index, value);
+                else {
+                  const existing = this.sequenceElement(address, type, at.index);
+                  if (existing.kind === 'aggregate') this.store(parts.value, existing.address + (parts.value ? 0 : 0), mapped);
+                }
+              } else if (args[1]) {
+                const key = this.valueForType(keyType, value);
+                const mapped = this.valueForType(parts?.value ?? intType(), argumentAt(1));
+                const pair = this.createPair(element, key, mapped);
+                const at = this.sequenceFindKey(address, type, key);
+                if (!at.found) this.sequenceInsertAt(address, type, at.index, pair);
+              }
+              return voidValue();
+            }
+            const key = keyOfArgument(value);
+            const at = this.sequenceFindKey(address, type, key);
+            if (!at.found) this.sequenceInsertAt(address, type, at.index, convertTo(element, value));
+            return voidValue();
+          }
+          case 'emplace': {
+            if (containerKind === 'map' && args[1]) {
+              const key = this.valueForType(keyType, argumentAt(0));
+              const mapped = this.valueForType(parts?.value ?? intType(), argumentAt(1));
+              const pair = this.createPair(element, key, mapped);
+              const at = this.sequenceFindKey(address, type, key);
+              if (!at.found) this.sequenceInsertAt(address, type, at.index, pair);
+              return voidValue();
+            }
+            const key = keyOfArgument(argumentAt(0));
+            const at = this.sequenceFindKey(address, type, key);
+            if (!at.found) this.sequenceInsertAt(address, type, at.index, this.valueForType(element, argumentAt(0)));
+            return voidValue();
+          }
+          case 'count': {
+            const at = this.sequenceFindKey(address, type, keyOfArgument(argumentAt(0)));
+            return intValue(longType(), at.found ? 1 : 0);
+          }
+          case 'contains': {
+            const at = this.sequenceFindKey(address, type, keyOfArgument(argumentAt(0)));
+            return intValue(intType(), at.found ? 1 : 0);
+          }
+          case 'find': {
+            const at = this.sequenceFindKey(address, type, keyOfArgument(argumentAt(0)));
+            const data = this.memory.readUint64(address);
+            const stride = Math.max(element.size, 1);
+            return pointerValue(element, at.found ? data + at.index * stride : data + size * stride);
+          }
+          case 'at': {
+            const at = this.sequenceFindKey(address, type, keyOfArgument(argumentAt(0)));
+            if (!at.found) throw new RuntimeFault('std::map::at: key not found', position);
+            if (containerKind === 'map' && parts) {
+              const found = this.sequenceElement(address, type, at.index);
+              // The value lives at the pair's second member offset, not at the
+              // pair's start - reading from the start hands back the key.
+              return found.kind === 'aggregate'
+                ? this.load(parts.value, found.address + (element.members?.[1]?.offset ?? 0))
+                : found;
+            }
+            return this.sequenceElement(address, type, at.index);
+          }
+          case 'erase': {
+            const at = this.sequenceFindKey(address, type, keyOfArgument(argumentAt(0)));
+            if (at.found) this.sequenceRemoveAt(address, type, at.index);
+            return intValue(longType(), at.found ? 1 : 0);
+          }
+          default:
+            throw new RuntimeFault(`std::${containerKind} has no member '${property}'`, position);
+        }
+      }
+
+      // ---- queue<T>, stack<T>, deque<T>
+      if (containerKind === 'queue' || containerKind === 'stack' || containerKind === 'deque') {
+        const stride = Math.max(element.size, 1);
+        const first = (): Value => this.sequenceElement(address, type, 0);
+        const last = (): Value => this.sequenceElement(address, type, this.sequenceSize(address) - 1);
+        void stride;
+
+        switch (property) {
+          case 'push':
+          case 'push_back':
+            this.vectorPush(address, type, this.valueForType(element, argumentAt(0)));
+            return voidValue();
+          case 'push_front':
+            this.sequenceInsertAt(address, type, 0, this.valueForType(element, argumentAt(0)));
+            return voidValue();
+          case 'pop':
+            if (containerKind === 'queue') {
+              if (size > 0) this.sequenceRemoveAt(address, type, 0);
+              return voidValue();
+            }
+            if (size > 0) this.sequenceRemoveAt(address, type, size - 1);
+            return voidValue();
+          case 'pop_back':
+            if (size > 0) this.sequenceRemoveAt(address, type, size - 1);
+            return voidValue();
+          case 'pop_front':
+            if (size > 0) this.sequenceRemoveAt(address, type, 0);
+            return voidValue();
+          case 'front':
+            return size > 0 ? first() : voidValue();
+          case 'back':
+            return size > 0 ? last() : voidValue();
+          case 'top':
+            return size > 0 ? last() : voidValue();
+          case 'at': {
+            const index = Math.trunc(toNumber(argumentAt(0)));
+            if (index < 0 || index >= size) {
+              throw new RuntimeFault(`std::${containerKind} index ${index} is out of range`, position);
+            }
+            return this.sequenceElement(address, type, index);
+          }
+          default:
+            throw new RuntimeFault(`std::${containerKind} has no member '${property}'`, position);
+        }
+      }
+
+      // ---- priority_queue<T>
+      if (containerKind === 'priority-queue') {
+        const stride = Math.max(element.size, 1);
+        switch (property) {
+          case 'push': {
+            this.vectorPush(address, type, this.valueForType(element, argumentAt(0)));
+            // Sift the new element up to restore the heap.
+            let child = this.sequenceSize(address) - 1;
+            const data = this.memory.readUint64(address);
+            while (child > 0) {
+              const parent = (child - 1) >> 1;
+              const childValue = this.load(element, data + child * stride);
+              const parentValue = this.load(element, data + parent * stride);
+              if (this.compareValues(childValue, parentValue) <= 0) break;
+              this.store(element, data + parent * stride, childValue);
+              this.store(element, data + child * stride, parentValue);
+              child = parent;
+            }
+            return voidValue();
+          }
+          case 'pop': {
+            if (size === 0) return voidValue();
+            const data = this.memory.readUint64(address);
+            const lastValue = this.load(element, data + (size - 1) * stride);
+            this.store(element, data, lastValue);
+            this.sequenceRemoveAt(address, type, size - 1);
+            this.siftDown(address, type, 0, this.sequenceSize(address));
+            return voidValue();
+          }
+          case 'top':
+            return size > 0 ? this.sequenceElement(address, type, 0) : voidValue();
+          default:
+            throw new RuntimeFault(`std::priority_queue has no member '${property}'`, position);
+        }
       }
     }
 
@@ -2640,6 +3110,19 @@ class Interpreter {
   // ------------------------------------------------------------- memory IO
 
   private store(type: CType, address: number, value: Value): void {
+    /*
+     * Storing into a `std::string` always builds the string object.
+     *
+     * Writing the bytes of a literal instead produced the same bug in three places
+     * (vector elements, map keys, pair members): the bytes are later read back as a
+     * data pointer. Handling it here means every store site is correct instead of
+     * each caller having to remember.
+     */
+    if (isStringType(type)) {
+      this.createString(address, this.stringTextOf(value));
+      return;
+    }
+
     switch (type.kind) {
       case 'bool':
         this.memory.writeUint8(address, toNumber(value) !== 0 ? 1 : 0);
@@ -2859,6 +3342,21 @@ class Interpreter {
 
   private readStringValue(value: Value | undefined): string {
     if (!value) return '';
+
+    /*
+     * An aggregate carries its text itself.
+     *
+     * `toPointerAddress` on a char array reads its first bytes as an address -
+     * which for "seven" is 0x6e65766573, the ASCII of "seve" - and dereferencing
+     * that is how a `std::string` member ended up crashing the whole program.
+     */
+    if (value.kind === 'aggregate') {
+      if (isStringType(value.type)) return this.stringText(value.address);
+      if (value.type.kind === 'array' && value.type.element?.kind === 'char') {
+        return this.memory.readCString(value.address, 1 << 16);
+      }
+    }
+
     const address = toPointerAddress(value);
     if (address === null || address === 0) return '';
     return this.memory.readCString(address);
@@ -3079,9 +3577,28 @@ class Interpreter {
    */
   private describeValue(value: Value, depth = MAX_SEQUENCE_DEPTH): string {
     if (value.kind === 'aggregate' && depth > 0) {
-      if (isVectorType(value.type)) {
+      const containerKind = containerKindOf(value.type);
+      if (containerKind !== null) {
         const layout = readVectorLayout(this.memory, value.address, value.type.element);
-        return this.describeElements(layout.data, layout.count, layout.element, depth);
+        return this.describeContainer(
+          containerKind,
+          layout.data,
+          layout.count,
+          layout.element,
+          depth,
+        );
+      }
+
+      if (isPairType(value.type)) {
+        const first = value.type.members?.[0];
+        const second = value.type.members?.[1];
+        const left = first
+          ? this.describeValue(this.load(first.type, value.address + first.offset), depth - 1)
+          : '?';
+        const right = second
+          ? this.describeValue(this.load(second.type, value.address + second.offset), depth - 1)
+          : '?';
+        return `(${left}, ${right})`;
       }
 
       if (value.type.kind === 'array' && value.type.element) {
@@ -3102,6 +3619,48 @@ class Interpreter {
     }
 
     return formatValue(value, this.memory);
+  }
+
+  /**
+   * How each container reads at a glance: `[..]` for sequences, `{..}` for a set,
+   * `{key: value}` for a map - always with the 20-element cap and the count of
+   * what was left out, the same rule the vector preview follows.
+   */
+  private describeContainer(
+    kind: string,
+    data: number,
+    count: number,
+    element: CType,
+    depth: number,
+  ): string {
+    const braces = kind === 'map' || kind === 'set';
+    if (count <= 0) return braces ? '{}' : '[]';
+
+    const shown = Math.min(count, CONTAINER_PREVIEW_LIMIT);
+    const stride = Math.max(element.size, 1);
+    const parts: string[] = [];
+
+    for (let index = 0; index < shown; index += 1) {
+      const value = this.load(element, data + index * stride);
+      const pair = kind === 'map' ? pairParts(element) : null;
+
+      if (pair && value.kind === 'aggregate') {
+        const valueOffset = element.members?.[1]?.offset ?? 0;
+        const key = this.describeValue(this.load(pair.key, value.address), depth - 1);
+        const mapped = this.describeValue(
+          this.load(pair.value, value.address + valueOffset),
+          depth - 1,
+        );
+        parts.push(`${key}: ${mapped}`);
+        continue;
+      }
+
+      parts.push(this.describeElement(value, depth - 1));
+    }
+
+    const hidden = count - shown;
+    if (hidden > 0) parts.push(`+${hidden} more`);
+    return braces ? `{${parts.join(', ')}}` : `[${parts.join(', ')}]`;
   }
 
   private describeElements(
