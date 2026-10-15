@@ -3,7 +3,7 @@ import { getEngine } from '@/engine/registry';
 import type { EngineId } from '@/engine/types';
 
 /**
- * Props for the MobileHeader component.
+ * @brief Props for the MobileHeader component.
  */
 export interface MobileHeaderProps {
   /** Callback fired when the user taps the overflow menu button. */
@@ -18,7 +18,8 @@ export interface MobileHeaderProps {
  * @param props Component properties containing the menu toggle handler.
  * @return Mobile header JSX element.
  */
-export function MobileHeader({ onOpenMenu }: MobileHeaderProps) {
+export function MobileHeader(props: MobileHeaderProps) {
+  const { onOpenMenu } = props;
   const path = useAppStore((state) => state.path);
   const engineId = useAppStore((state) => state.engineId);
   const setEngineId = useAppStore((state) => state.setEngineId);

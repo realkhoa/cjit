@@ -1,5 +1,5 @@
 /**
- * Quick symbol descriptor.
+ * @brief Quick symbol descriptor.
  */
 export interface QuickKey {
   readonly label: string;
@@ -28,7 +28,7 @@ export const C_PLUS_PLUS_QUICK_KEYS: readonly QuickKey[] = [
 ];
 
 /**
- * Properties for the MobileAccessoryBar component.
+ * @brief Properties for the MobileAccessoryBar component.
  */
 export interface MobileAccessoryBarProps {
   /** Optional custom insert callback. */
@@ -43,7 +43,8 @@ export interface MobileAccessoryBarProps {
  * @param props Component properties.
  * @return Accessory bar JSX element.
  */
-export function MobileAccessoryBar({ onInsertText }: MobileAccessoryBarProps) {
+export function MobileAccessoryBar(props: MobileAccessoryBarProps) {
+  const { onInsertText } = props;
   /**
    * @brief Dispatches the selected quick key text to the active editor.
    * @param key The quick key descriptor to insert.

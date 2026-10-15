@@ -6,7 +6,8 @@ import { PANE_LABELS, PANE_ORDER, type PaneId } from '@/ui/responsive';
  * @param props Props containing the pane identifier.
  * @return SVG icon element.
  */
-function TabIcon({ id }: { readonly id: PaneId }) {
+function TabIcon(props: { readonly id: PaneId }) {
+  const { id } = props;
   switch (id) {
     case 'files':
       return (

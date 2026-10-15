@@ -6,7 +6,7 @@ import { isTranslationUnit } from '@/lang/clang/runtime';
 import { SettingsDialog } from '@/ui/SettingsDialog';
 
 /**
- * Properties for the MobileMenu component.
+ * @brief Properties for the MobileMenu component.
  */
 export interface MobileMenuProps {
   /** Callback fired when the bottom sheet should close. */
@@ -21,7 +21,8 @@ export interface MobileMenuProps {
  * @param props Component properties containing the close callback.
  * @return Mobile bottom sheet JSX element.
  */
-export function MobileMenu({ onClose }: MobileMenuProps) {
+export function MobileMenu(props: MobileMenuProps) {
+  const { onClose } = props;
   const engineId = useAppStore((state) => state.engineId);
   const setEngineId = useAppStore((state) => state.setEngineId);
   const artifactsReady = useAppStore((state) => state.artifactsReady);
