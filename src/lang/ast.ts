@@ -246,6 +246,13 @@ export interface StructDeclNode extends Node {
   readonly isClass?: boolean;
   /** Member functions, which are not part of the layout. */
   readonly methods?: readonly MethodDecl[];
+  /**
+   * `template <typename T> struct Box { T value; };`
+   *
+   * The parameter names, in order. This is a class *template*: nothing exists until
+   * `Box<int>` asks for an instantiation, which is when each `T` becomes a real type.
+   */
+  readonly templateParams?: readonly string[];
 }
 
 export interface EnumDeclNode extends Node {

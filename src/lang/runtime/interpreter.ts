@@ -744,6 +744,37 @@ class Interpreter {
   private prepareTypes(declarations: readonly Declaration[]): void {
     for (const declaration of declarations) {
       if (declaration.kind === 'struct' && declaration.isDefinition) {
+        /*
+         * A class template is registered as a template, not as a type: nothing has a
+         * layout until `Box<int>` asks for one. Its methods are not registered either -
+         * they belong to each instantiation, which is not supported yet.
+         */
+        if (declaration.templateParams && declaration.tag) {
+          /*
+           * Methods of a class template belong to each instantiation, which is not
+           * implemented: saying so once is better than an object that silently lacks the
+           * method its class declares.
+           */
+          if ((declaration.methods ?? []).some((method) => method.body)) {
+            this.diagnostics.push(
+              makeDiagnostic(
+                'warning',
+                `methods of the class template '${declaration.tag}' are not supported by the fast engine; Run (F5) uses clang-wasm`,
+                declaration.start.file,
+                declaration.start,
+                declaration.end,
+              ),
+            );
+          }
+
+          this.resolver.registerClassTemplate(
+            declaration.tag,
+            declaration.templateParams,
+            declaration.members,
+          );
+          continue;
+        }
+
         this.resolver.registerStruct(declaration.tag, declaration.members, declaration.isUnion);
         this.registerMethods(declaration);
         continue;

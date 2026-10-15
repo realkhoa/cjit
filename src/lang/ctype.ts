@@ -471,6 +471,20 @@ function stripQualifiers(name: string): string {
 export class TypeResolver {
   private readonly tags = new Map<string, CType>();
   private readonly typedefs = new Map<string, TypeRef>();
+  /** Class templates by name: nothing is laid out until an instantiation is asked for. */
+  /** Instantiations already built, keyed by their display name. */
+  private readonly instantiations = new Map<string, CType>();
+  private readonly classTemplates = new Map<
+    string,
+    {
+      readonly params: readonly string[];
+      readonly members: readonly {
+        readonly name: string;
+        readonly type: TypeRef;
+        readonly access?: 'public' | 'private' | 'protected';
+      }[];
+    }
+  >();
   private readonly enums = new Map<string, CType>();
   private readonly unknown = new Set<string>();
 
@@ -494,6 +508,120 @@ export class TypeResolver {
       this.tags.set(`${isUnion ? 'union' : 'struct'} ${tag}`, laid);
     }
     return laid;
+  }
+
+  /**
+   * `template <typename T> struct Box { T value; };` is not a type yet.
+   *
+   * Nothing exists until `Box<int>` asks: then each `T` is replaced by the argument and
+   * the members are laid out for real. Keeping the members unresolved is what lets one
+   * declaration serve every instantiation.
+   */
+  registerClassTemplate(
+    name: string,
+    params: readonly string[],
+    members: readonly {
+      readonly name: string;
+      readonly type: TypeRef;
+      readonly access?: 'public' | 'private' | 'protected';
+    }[],
+  ): void {
+    this.classTemplates.set(name, { params, members });
+  }
+
+  /** A class template's members with its parameters replaced by real types. */
+  private instantiateTemplate(
+    name: string,
+    args: readonly string[],
+    depth: number,
+  ): CType | undefined {
+    const template = this.classTemplates.get(name);
+    if (!template) return undefined;
+
+    const resolved = template.params.map((_param, index) =>
+      this.resolveByName((args[index] ?? 'int').trim(), depth + 1),
+    );
+    // The instantiation's own name, so the pane shows `Box<int>` and not `Box`.
+    const displayName = `${name}<${resolved.map((type) => type.name).join(', ')}>`;
+
+    const cached = this.instantiations.get(displayName);
+    if (cached) return cached;
+
+    /*
+     * Two phases, with the type filled in afterwards, because a member may point at the
+     * type being built: `template <typename T> struct Node { T value; Node* next; };`.
+     * The pointer needs the same object, not a copy, so the provisional one is shared and
+     * completed once the layout is known.
+     */
+    const provisional: {
+      kind: CType['kind'];
+      name: string;
+      size: number;
+      signed: boolean;
+      bits: number;
+      members: readonly CTypeMember[];
+    } = { kind: 'struct', name: displayName, size: 0, signed: false, bits: 0, members: [] };
+
+    this.instantiations.set(displayName, provisional as CType);
+    this.tags.set(displayName, provisional as CType);
+    this.tags.set(`struct ${displayName}`, provisional as CType);
+
+    const substitution = new Map<string, CType>();
+    template.params.forEach((param, index) => {
+      substitution.set(param, resolved[index] ?? SCALAR_BY_NAME.get('int') ?? UNKNOWN_TYPE);
+    });
+    // Inside the body, the template's own name means this instantiation.
+    substitution.set(name, provisional as CType);
+
+    const laid: CTypeMember[] = [];
+    let offset = 0;
+    let maxAlign = 1;
+
+    for (const member of template.members) {
+      const memberType = this.substituteType(member.type, substitution);
+      const alignment = alignOf(memberType);
+      maxAlign = Math.max(maxAlign, alignment);
+      const memberOffset = alignUp(offset, alignment);
+      laid.push({
+        name: member.name,
+        type: memberType,
+        offset: memberOffset,
+        ...(member.access ? { access: member.access } : {}),
+      });
+      offset = memberOffset + memberType.size;
+    }
+
+    provisional.members = laid;
+    provisional.size = template.members.length === 0 ? 0 : alignUp(offset, maxAlign);
+    return provisional as CType;
+  }
+
+  /** `T`, `T *`, `std::vector<T>` - a member type with the parameters replaced. */
+  private substituteType(
+    ref: TypeRef,
+    substitution: ReadonlyMap<string, CType>,
+  ): CType {
+    if (ref.kind === 'pointer' && ref.pointee) {
+      const inner = this.substituteType(ref.pointee, substitution);
+      return ref.reference ? { ...pointerTo(inner), name: `${inner.name} &` } : pointerTo(inner);
+    }
+
+    const direct = substitution.get(ref.name);
+    if (direct) return direct;
+
+    // A composed name such as `std::vector<T>`: rewrite the text and resolve it.
+    let text = ref.name;
+    let replaced = false;
+    for (const [param, type] of substitution) {
+      const pattern = new RegExp(`\\b${param}\\b`, 'g');
+      if (pattern.test(text)) {
+        text = text.replace(pattern, type.name);
+        replaced = true;
+      }
+    }
+    if (replaced) return this.resolveByName(text, 0);
+
+    return this.resolve(ref);
   }
 
   registerTypedef(name: string, target: TypeRef): void {
@@ -646,6 +774,20 @@ export class TypeResolver {
 
     const enumType = this.enums.get(name);
     if (enumType) return enumType;
+
+    /*
+     * `Box<int>`: the engine's own class templates, checked before the standard
+     * containers because a user type with that shape must win.
+     */
+    const classTemplateMatch = /^([A-Za-z_]\w*)\s*<(.+)>$/.exec(name);
+    if (classTemplateMatch) {
+      const instantiated = this.instantiateTemplate(
+        classTemplateMatch[1] ?? '',
+        splitTemplateArguments(classTemplateMatch[2] ?? ''),
+        depth,
+      );
+      if (instantiated) return instantiated;
+    }
 
     // C++ containers the engine resolves itself, so no diagnostic is needed.
     const containerMatch =

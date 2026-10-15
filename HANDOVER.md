@@ -18,7 +18,7 @@ console below, VS 2022 dark theme. Two engines:
 |---|---|
 | Live | https://realkhoa.github.io/cjit/ |
 | Deploy | GitHub Actions → Pages (`worktree main`, `enablement: true`) |
-| Tests | **705 passing, 57 files** (`npm test`) |
+| Tests | **720 passing, 58 files** (`npm test`) |
 | Typecheck / build | both clean (`npm run typecheck`, `npm run build`) |
 | Last deploy | CI green, `index-aXOFXXco.js` |
 
@@ -79,13 +79,12 @@ Two suites run it:
   missing**, which is the case in CI, so **run it locally** (`npm run toolchain` first if needed). It has
   already caught **8 wrong expectations written by me** where the engine was right.
 
-Current state: **39 `fast` cases**, 4 gaps left:
+Current state: **43 `fast` cases**, 3 gaps left:
 
 | Gap | What is missing |
 |---|---|
 | `function overloading` | two functions with one name; the engine refuses loudly instead of guessing |
 | `range-for over an initializer list` | `for (int v : {1, 2, 3})` |
-| `class template` | `template <typename T> struct Box { T value; };` (feature 8, not started) |
 | `stringstream` | `std::ostringstream` / `.str()` |
 
 ## 5. What is done (goal features 1–8)
@@ -99,7 +98,7 @@ Current state: **39 `fast` cases**, 4 gaps left:
 | 5 | Classes, methods, `this`, access | `tests/classes.test.ts` | class = struct + default private; access enforced both ways |
 | 6 | Ctor/dtor, operator overloading, default args | `tests/classFeatures.test.ts` | destructors run at scope exit in reverse |
 | 7 | Lambdas, captures, `std::function` | `tests/lambdas.test.ts` | `[x]`, `[&x]`, `[=]`, `[&]`; lambdas as values |
-| 8 (partial) | `new`/`delete`, `std::sort` with a lambda comparator | in the corpus | **class template still open** |
+| 8 | `new`/`delete`, `std::sort` with a comparator, **class templates** | `tests/classTemplates.test.ts` + corpus | templates: several instantiations, two parameters, a container member, a self-referential pointer. **Methods of a class template are not supported** and warn |
 
 Other shipped work (from earlier rounds, all deployed): projects (several in one workspace, each with its own
 files, recoverable project trash, `cjit.files.v3` with v1/v2 migration), data safety (file trash, non-destructive
@@ -163,13 +162,14 @@ tests/                       one file per feature; tests/conformance/ is the cor
 
 ## 9. Honest status: what is *not* done
 
-- **Class templates** (feature 8's second half) — not started. Plan sketched: a class-template registry in
-  `TypeResolver` with a parameter→type substitution when `Box<int>` is resolved.
-- **Function overloading**, **stringstream**, **range-for over an initializer list** (the three other corpus gaps).
+- **Methods of a class template** (`Box<T>::get()`): the instantiation carries data members only; using a
+  method warns once and then fails visibly rather than returning an object that quietly lacks it.
+- **Function overloading**, **stringstream**, **range-for over an initializer list** (the three corpus gaps).
 - Beyond the corpus: **reference return types** (`int& f()`), **member-form operators**
   (`Number Number::operator+`), **`operator<<` for user types**, **out-of-class method definitions**,
   **`const`/`static` methods**, **inheritance/virtual**, `mutable` lambdas, default member initialisers in a
-  class (`int value = 0;`), deep copy of container captures (`vector<string>` shares its element buffer).
+  class (`int value = 0;`), deep copy of container captures (`vector<string>` shares its element buffer),
+  template specialisation, and class templates as *parameters* of other templates.
 - The fast engine is **not** a native compiler yet; it is converging on the corpus one feature at a time.
 
 ## 10. Quick start for the next agent

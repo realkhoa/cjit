@@ -129,6 +129,8 @@ class Parser {
   private usingNamespaceStd = false;
   /** Names from `using std::string;` and friends. */
   private readonly usingNames = new Set<string>();
+  /** Parameters of the 	emplate <...> header just read, for the declaration after it. */
+  private pendingTemplateParams: string[] = [];
   private depth = 0;
 
   constructor(
@@ -336,10 +338,11 @@ class Parser {
    * type names, so the declaration that follows parses normally and the engine
    * can execute it with runtime types.
    */
-  private parseTemplateHeader(): void {
-    if (!this.check('template')) return;
+  private parseTemplateHeader(): string[] {
+    const params: string[] = [];
+    if (!this.check('template')) return params;
     this.advance();
-    if (!this.check('<')) return;
+    if (!this.check('<')) return params;
     this.advance();
 
     let depth = 1;
@@ -365,12 +368,15 @@ class Parser {
       if (expectParameter && (token.kind === 'identifier' || token.kind === 'keyword')) {
         // The parameter is a type name from here on: `T total{};` must parse.
         this.typedefs.add(token.text);
+        params.push(token.text);
         expectParameter = false;
         this.advance();
         continue;
       }
       this.advance();
     }
+
+    return params;
   }
 
   /** Consumes a `<...>` argument list and returns its canonical inner text. */
@@ -577,6 +583,14 @@ class Parser {
       }
     }
 
+    /*
+     * The tag is known from here, before the body is read, so a member can refer to the
+     * type being defined: `struct Node { struct Node *next; }` and, for a template,
+     * `template <typename T> struct Entry { Entry* next; };` - a shape that is otherwise
+     * rejected with "expected a member declaration".
+     */
+    if (tag !== undefined) this.tags.add(`${isUnion ? 'union' : 'struct'} ${tag}`);
+
     const members: MemberDecl[] = [];
     const methods: MethodDecl[] = [];
     let isDefinition = false;
@@ -732,6 +746,10 @@ class Parser {
 
     if (tag !== undefined) this.tags.add(`${isUnion ? 'union' : 'struct'} ${tag}`);
 
+    // The header belongs to the declaration that follows it, not to anything later.
+    const templateParams = this.pendingTemplateParams;
+    this.pendingTemplateParams = [];
+
     return {
       kind: 'struct',
       tag,
@@ -740,6 +758,7 @@ class Parser {
       members,
       ...(isClass ? { isClass: true } : {}),
       ...(methods.length > 0 ? { methods } : {}),
+      ...(templateParams.length > 0 ? { templateParams } : {}),
       start: keyword.start,
       end: this.previousEnd(),
     };
@@ -1039,7 +1058,7 @@ class Parser {
     // first (it registers T as a type name), then parse the declaration that
     // follows. This must happen before the "unsupported construct" check, which
     // would otherwise skip the whole template as a C++-only feature.
-    this.parseTemplateHeader();
+    this.pendingTemplateParams = this.parseTemplateHeader();
 
     /*
      * `namespace math { ... }`. The engine has one flat global table, so a namespace
