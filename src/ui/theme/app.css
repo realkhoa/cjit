@@ -182,6 +182,12 @@ button {
   opacity: 0.8;
 }
 
+/* The line the selected timeline moment came from. */
+.cjit-timeline-line {
+  background: rgba(86, 156, 214, 0.16);
+  box-shadow: inset 2px 0 0 var(--vs-accent);
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

@@ -5,7 +5,6 @@ import { IterationsDialog } from '@/ui/IterationsDialog';
 import { buildIterationTable, hasIterations } from '@/ui/iterationTable';
 import { overallTone, pillClass, watchStatusLabel } from '@/ui/status';
 import { selectWatchView } from '@/ui/watchSelect';
-import type { WatchMode } from '@/ui/watchSelect';
 
 function VarRows({ nodes, depth }: { readonly nodes: readonly VarNode[]; readonly depth: number }) {
   return (
@@ -43,9 +42,14 @@ export function WatchPane() {
 
   const [openLocals, setOpenLocals] = useState(true);
   const [openStack, setOpenStack] = useState(true);
-  const [mode, setMode] = useState<WatchMode>('cursor');
-  const [historyIndex, setHistoryIndex] = useState(0);
   const [iterationsOpen, setIterationsOpen] = useState(false);
+
+  // The selected moment lives in the store, not here: the editor highlights the
+  // line that moment came from, so both panes have to agree on it.
+  const mode = useAppStore((state) => state.watchMode);
+  const historyIndex = useAppStore((state) => state.timelineIndex);
+  const setMode = useAppStore((state) => state.setWatchMode);
+  const setHistoryIndex = useAppStore((state) => state.setTimelineIndex);
 
   const tone = overallTone(runState, analysisState, watch.status);
   const view = selectWatchView(watch, { mode, cursorLine, historyIndex });

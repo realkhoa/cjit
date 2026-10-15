@@ -31,6 +31,31 @@ export interface WatchView {
   readonly changedCount: number;
 }
 
+export interface TimelineHighlight {
+  readonly line: number;
+  readonly className: string;
+}
+
+/**
+ * The line the editor should highlight while the timeline is being scrubbed: the
+ * line the selected moment was recorded at, so scrubbing shows *where* the program
+ * was, not only what the variables were.
+ *
+ * Only timeline mode highlights anything. In cursor mode Monaco's own current-line
+ * highlight already follows the caret, and `final` is not a moment but a result.
+ */
+export function timelineHighlightFor(
+  watch: WatchSnapshot,
+  selection: WatchSelection,
+): TimelineHighlight | null {
+  if (selection.mode !== 'timeline') return null;
+
+  const line = selectWatchView(watch, selection).line;
+  if (line === null || line <= 0) return null;
+
+  return { line, className: 'cjit-timeline-line' };
+}
+
 /**
  * Flags variables whose value differs from the previous moment. A variable that
  * did not exist yet also counts as changed: it is what that step produced.

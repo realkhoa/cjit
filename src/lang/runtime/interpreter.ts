@@ -2795,17 +2795,39 @@ class Interpreter {
   }
 
   private collectWatch(): WatchVariable[] {
-    const latest = new Map<string, Binding>();
+    /*
+     * Innermost scope first.
+     *
+     * A name can be live twice at once - the caller's `int total = sum(nums);` and
+     * the `T total{}` accumulating inside the template. Keying by
+     * `scopeName::name` kept both and the pane showed the outer one, so the
+     * iteration table reported `total = 0` for every pass while the interpreter was
+     * summing correctly. Reading the active scope stack from the top resolves a
+     * shadowed name to the binding that is actually live.
+     */
+    const ordered: Binding[] = [];
+    for (let index = this.scopes.length - 1; index >= 0; index -= 1) {
+      const scope = this.scopes[index];
+      if (scope) ordered.push(...scope.bindings.values());
+    }
+
+    const inActiveScope = new Set(ordered);
     for (const binding of this.allBindings) {
+      // Globals (declared with no scope on the stack) are not in any active scope.
+      if (!inActiveScope.has(binding)) ordered.push(binding);
+    }
+
+    const seen = new Set<string>();
+    const vars: WatchVariable[] = [];
+    for (const binding of ordered) {
       // Only the user's own file: `stdin`/`stdout`/`stderr` come from headers.
       if (binding.declaredAt.file !== this.mainFile && binding.declaredAt.file.startsWith('<')) {
         continue;
       }
-      latest.set(`${binding.scopeName}::${binding.name}`, binding);
-    }
+      // An inner binding hides an outer one with the same name.
+      if (seen.has(binding.name)) continue;
+      seen.add(binding.name);
 
-    const vars: WatchVariable[] = [];
-    for (const binding of latest.values()) {
       if (vars.length >= this.limits.maxVars) {
         this.truncated = true;
         break;

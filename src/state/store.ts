@@ -24,6 +24,7 @@ import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
 import type { EditorSettings } from '@/state/settings';
 import { isMobileViewport } from '@/ui/responsive';
 import type { PaneId } from '@/ui/responsive';
+import type { WatchMode } from '@/ui/watchSelect';
 import {
   decodeShare,
   encodeShare,
@@ -114,8 +115,17 @@ export interface AppState {
    * want depends on what you are doing right now, not on last week's session.
    */
   readonly mobilePane: PaneId;
+  /**
+   * Which moment the Watch pane is showing. It lives here rather than inside the
+   * pane because the editor highlights the line that moment came from, so both
+   * have to agree on it.
+   */
+  readonly watchMode: WatchMode;
+  readonly timelineIndex: number;
 
   setMobilePane(pane: PaneId): void;
+  setWatchMode(mode: WatchMode): void;
+  setTimelineIndex(index: number): void;
   setCodeFromEditor(code: string): void;
   loadExample(path: string, language: FileLanguage, code: string): void;
   createFile(): void;
@@ -216,6 +226,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   cursor: { line: 1, column: 1, selected: 0 },
   settings: settingsFrom(persisted),
   mobilePane: 'code',
+  watchMode: 'cursor',
+  timelineIndex: 0,
 
   setCodeFromEditor(code) {
     const { files, activeFileId } = get();
@@ -407,6 +419,17 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setMobilePane(pane) {
     set({ mobilePane: pane });
+  },
+
+  setWatchMode(mode) {
+    set({ watchMode: mode });
+  },
+
+  setTimelineIndex(index) {
+    // The history shrinks when the code changes, so the index is clamped here as
+    // well as when it is read.
+    const last = Math.max(get().watch.history.length - 1, 0);
+    set({ timelineIndex: Math.min(Math.max(Math.trunc(index), 0), last) });
   },
 
   toggleInlineValues() {

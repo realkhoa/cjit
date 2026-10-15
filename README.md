@@ -146,6 +146,13 @@ Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu v
   `vector<char>` hiện `['h', 'i']` (không kèm mã số); lồng nhau được (`[[1, 2], [3]]`, sâu tối đa 3 tầng).
 - **Watch pane 3 chế độ**: `At cursor` (mặc định, state tại dòng con trỏ), `Timeline` (scrub qua từng lần gán
   biến *và* từng vòng lặp, nhãn `iteration 2 of the loop on line 3`), `Final` (state sau khi chạy xong).
+  Khi kéo timeline, **editor highlight và tự cuộn tới dòng đã sinh ra state đó** — pane nói *giá trị là gì*, editor
+  nói *chương trình đang ở đâu*. Chỉ chế độ timeline làm việc này: ở `At cursor` thì Monaco đã có highlight dòng
+  con trỏ, còn `Final` là kết quả chứ không phải một thời điểm.
+- **Tên bị shadow giữa các scope**: nếu một tên cùng lúc tồn tại ở nhiều scope (ví dụ `int total = sum(nums);`
+  ở `main` và `T total{}` đang tích luỹ trong template `sum`), pane hiển thị binding **trong cùng đang sống**.
+  Trước đây nó key theo `scope::tên` nên giữ cả hai, và UI lấy cái ngoài → modal iteration báo `total = 0` cho
+  mọi vòng trong khi interpreter cộng đúng.
 - **Highlight giá trị đổi**: biến vừa đổi (hoặc vừa xuất hiện) được tô đỏ, kèm bộ đếm `n changed`.
 - **Modal iteration theo VÒNG LẶP**: interpreter ghi một entry cho mỗi **vòng lặp** (`for`/`while`/`do-while`/
   range-for) — state sau khi vòng đó chạy xong, kèm số vòng của chính nó, độ sâu lồng nhau và tập dòng mà vòng

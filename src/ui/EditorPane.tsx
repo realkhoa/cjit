@@ -9,6 +9,7 @@ import { useIsMobile } from '@/ui/useIsMobile';
 import { getPublishedAnalysis } from '@/lang/analysisCache';
 import { useAppStore } from '@/state/store';
 import { inlineDecorationSpecs } from '@/ui/inlineValues';
+import { timelineHighlightFor } from '@/ui/watchSelect';
 import { EDITOR_THEME_DARK } from '@/ui/theme/monacoTheme';
 
 type Editor = Monaco.editor.IStandaloneCodeEditor;
@@ -25,6 +26,8 @@ export function EditorPane() {
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
   const watch = useAppStore((state) => state.watch);
   const inlineValuesEnabled = useAppStore((state) => state.settings.inlineValues);
+  const watchMode = useAppStore((state) => state.watchMode);
+  const timelineIndex = useAppStore((state) => state.timelineIndex);
   const fontSize = useAppStore((state) => state.settings.fontSize);
   const minimap = useAppStore((state) => state.settings.minimap);
   const mobilePane = useAppStore((state) => state.mobilePane);
@@ -225,6 +228,44 @@ export function EditorPane() {
       })),
     );
   }, [watch, inlineValuesEnabled]);
+
+  /*
+   * While the timeline is being scrubbed, highlight the line the selected moment
+   * was recorded at and bring it into view: the pane says what the variables were,
+   * this says where the program was. Only timeline mode does this - in cursor mode
+   * Monaco's own current-line highlight already follows the caret.
+   */
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+
+    const highlight = timelineHighlightFor(watch, {
+      mode: watchMode,
+      cursorLine,
+      historyIndex: timelineIndex,
+    });
+
+    const collection = editor.createDecorationsCollection([]);
+    if (highlight && highlight.line <= model.getLineCount()) {
+      collection.set([
+        {
+          range: new monaco.Range(highlight.line, 1, highlight.line, 1),
+          options: {
+            isWholeLine: true,
+            className: highlight.className,
+            overviewRuler: {
+              color: 'rgba(86, 156, 214, 0.8)',
+              position: monaco.editor.OverviewRulerLane.Left,
+            },
+          },
+        },
+      ]);
+      editor.revealLineInCenterIfOutsideViewport(highlight.line, monaco.editor.ScrollType.Smooth);
+    }
+
+    return () => collection.clear();
+  }, [watch, watchMode, timelineIndex, cursorLine]);
 
   // Front-end diagnostics become Monaco markers, so errors are visible in place.
   useEffect(() => {
