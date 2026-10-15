@@ -891,8 +891,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'range-for over an initializer list',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'a braced initializer list as the range of a for loop',
+    support: 'fast',
     expect: '6\n',
     code: [
       '#include <iostream>',
@@ -929,8 +928,7 @@ export const CORPUS: readonly ConformanceCase[] = [
   {
     name: 'stringstream',
     file: 'main.cpp',
-    support: 'clang-only',
-    note: 'std::stringstream / std::ostringstream',
+    support: 'fast',
     expect: 'n=12\n',
     code: [
       '#include <iostream>',

@@ -401,6 +401,18 @@ export function isStringType(type: CType): boolean {
   return type.kind === 'struct' && type.name === 'std::string';
 }
 
+/**
+ * @brief Checks if a CType represents an in-memory stream buffer.
+ * @details Identifies `std::ostringstream` and `std::stringstream`, which share
+ * the same control block layout as `std::string` to support operator<< appending
+ * and `.str()` retrieval.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents a stringstream or ostringstream, false otherwise.
+ */
+export function isStreamBuffer(type: CType): boolean {
+  return type.name === 'std::ostringstream' || type.name === 'std::stringstream';
+}
+
 /** Encodes an element type for the vector's runtime descriptor. */
 export function elementKindCode(type: CType): number {
   switch (type.kind) {
@@ -849,6 +861,14 @@ export class TypeResolver {
     }
 
     if (name === 'std::string' || name === 'string') return stringType();
+    // A string stream is the same buffer as a string, under another name.
+    if (
+      name === 'std::ostringstream' ||
+      name === 'std::stringstream' ||
+      name === 'std::istringstream'
+    ) {
+      return { ...stringType(), name };
+    }
     if (name === 'std::ostream' || name === 'std::istream' || name === 'std::iostream') {
       return { kind: 'unknown', name, size: 1, signed: false, bits: 8 };
     }

@@ -191,6 +191,34 @@ describe('C++ resolution: containers and algorithms', () => {
 
     expect(run(source).stdout).toBe('4\n');
   });
+
+  it('iterates over an initializer list in a range-based for loop', () => {
+    const source = [
+      '#include <iostream>',
+      'int main() {',
+      '    int total = 0;',
+      '    for (int v : {10, 20, 30}) { total += v; }',
+      '    std::cout << total << "\\n";',
+      '    return 0;',
+      '}',
+    ].join('\n');
+
+    expect(run(source).stdout).toBe('60\n');
+  });
+
+  it('iterates over an initializer list with auto and references', () => {
+    const source = [
+      '#include <iostream>',
+      'int main() {',
+      '    double total = 0.0;',
+      '    for (const auto& v : {1.25, 2.5, 3.25}) { total += v; }',
+      '    std::cout << total << "\\n";',
+      '    return 0;',
+      '}',
+    ].join('\n');
+
+    expect(run(source).stdout).toBe('7\n');
+  });
 });
 
 describe('C++ resolution: what still needs clang', () => {

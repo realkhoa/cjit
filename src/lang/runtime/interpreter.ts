@@ -26,6 +26,7 @@ import {
   isIntegerType,
   isPointerType,
   isPairType,
+  isStreamBuffer,
   isStringType,
   isVectorType,
   pairParts,
@@ -1114,6 +1115,14 @@ class Interpreter {
       this.uninitialized.delete(address);
       this.initialize(binding, declaration.initializer);
       this.record(binding, declaration.start);
+    } else if (containerKindOf(type) !== null) {
+      this.uninitialized.delete(address);
+      this.createContainer(type, address, []);
+      this.record(binding, declaration.start);
+    } else if (isStringType(type) || isStreamBuffer(type)) {
+      this.uninitialized.delete(address);
+      this.createString(address, '');
+      this.record(binding, declaration.start);
     }
   }
 
@@ -1756,16 +1765,43 @@ class Interpreter {
     }
 
     if (operator === '<<' || operator === '>>') {
-      const stream = this.streamOf(expression.left);
-      if (stream && operator === '<<') {
+      const target = this.streamTargetOf(expression.left);
+      if (target && operator === '<<') {
         // Evaluate the left link FIRST: in `cout << a << b` the left side carries
         // the earlier insertions, so skipping it would silently drop them.
         this.evaluate(expression.left);
-        const text = this.streamText(this.evaluate(expression.right));
-        this.appendOutput(text, stream === 'cerr');
-        return stream === 'cerr'
-          ? { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream:cerr' } }
-          : { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream' } };
+        const right = this.evaluate(expression.right);
+        const streamValue =
+          target.kind === 'stderr'
+            ? { kind: 'void' as const, type: { ...VOID_TYPE, name: 'std::ostream:cerr' } }
+            : { kind: 'void' as const, type: { ...VOID_TYPE, name: 'std::ostream' } };
+
+        /*
+         * A class that defines its own `operator<<` decides what it looks like when
+         * printed: `std::cout << point` calls `operator<<(std::ostream&, const Point&)`.
+         */
+        const userOperator = this.definitions.get('operator<<');
+        if (userOperator && this.isUserStreamOperand(right)) {
+          if (target.kind === 'buffer') {
+            // The buffer's identity cannot travel inside a stream value, so writing a
+            // custom type into one is refused rather than sent to the wrong place.
+            throw new RuntimeFault(
+              'writing a custom type into a stringstream is not supported; use std::cout',
+              expression.start,
+            );
+          }
+          this.callFunction(userOperator, [streamValue, right]);
+          return streamValue;
+        }
+
+        const text = this.streamText(right);
+        if (target.kind === 'buffer') {
+          // `out << "n=" << 12` builds the text in the stream's own buffer.
+          this.stringAppend(target.binding.address, text);
+        } else {
+          this.appendOutput(text, target.kind === 'stderr');
+        }
+        return streamValue;
       }
     }
 
@@ -3565,12 +3601,42 @@ class Interpreter {
     return null;
   }
 
+  /**
+   * @brief Executes a range-based `for` loop statement.
+   * @details Iterates over arrays, standard containers, strings, or braced initializer lists
+   * (e.g. `for (int v : {1, 2, 3})`), binding the loop variable across each element step.
+   * @param statement The AST node for the range-for statement.
+   */
   private executeForRange(statement: Extract<Statement, { kind: 'for-range' }>): void {
-    const iterable = this.evaluateRaw(statement.iterable);
-    const sequence = this.sequenceOf(iterable);
+    let sequence: { length: number; element: CType; data: number; stride: number } | null = null;
+
+    if (statement.iterable.kind === 'init-list') {
+      const items = statement.iterable.items;
+      const values = items.map((item) => this.evaluate(item));
+      const declaredType =
+        statement.declaration.kind === 'variable'
+          ? this.resolver.resolve(statement.declaration.type)
+          : UNKNOWN_TYPE;
+      const elemType =
+        declaredType.kind !== 'unknown' && declaredType.name !== 'auto'
+          ? (declaredType.kind === 'pointer' && statement.declaration.kind === 'variable' && statement.declaration.type.reference
+              ? (declaredType.pointee ?? intType())
+              : declaredType)
+          : (values[0]?.type ?? intType());
+      const stride = Math.max(elemType.size, 1);
+      const data = this.memory.alloc(Math.max(stride * items.length, 1), alignOf(elemType));
+      for (let i = 0; i < values.length; i++) {
+        this.store(elemType, data + i * stride, convertTo(elemType, values[i]!));
+      }
+      sequence = { length: values.length, element: elemType, data, stride };
+    } else {
+      const iterable = this.evaluateRaw(statement.iterable);
+      sequence = this.sequenceOf(iterable);
+    }
+
     if (!sequence) {
       throw new RuntimeFault(
-        'range-based for needs an array, std::vector or std::string',
+        'range-based for needs an array, std::vector, std::string or initializer list',
         statement.start,
       );
     }
@@ -3901,7 +3967,7 @@ class Interpreter {
       }
     }
 
-    if (object.kind === 'aggregate' && isStringType(object.type)) {
+    if (object.kind === 'aggregate' && (isStringType(object.type) || isStreamBuffer(object.type))) {
       const address = object.address;
       const text = this.stringText(address);
 
@@ -3909,6 +3975,8 @@ class Interpreter {
         args[index] ? this.evaluateRaw(args[index] as Expression) : intValue(intType(), 0);
 
       switch (property) {
+        case 'str':
+          return this.makeString(text);
         case 'size':
         case 'length':
           return intValue(longType(), text.length);
@@ -4515,16 +4583,53 @@ class Interpreter {
     return this.memory.readCString(address);
   }
 
-  private streamOf(expression: Expression): 'cout' | 'cerr' | null {
+  /**
+   * @brief Determines the output destination of a stream insertion operation (`<<`).
+   * @details Resolves `std::cout`, `std::cerr`, or an in-memory stringstream buffer.
+   * Recognizes bindings passed by reference (e.g., `std::ostream&`) within custom `operator<<`.
+   * @param expression The AST expression representing the stream destination.
+   * @return A descriptor indicating standard output, standard error, a stringstream buffer binding, or null.
+   */
+  private streamTargetOf(
+    expression: Expression,
+  ):
+    | { readonly kind: 'stdout' }
+    | { readonly kind: 'stderr' }
+    | { readonly kind: 'buffer'; readonly binding: Binding }
+    | null {
     if (expression.kind === 'identifier') {
-      if (expression.name === 'std::cout' || expression.name === 'cout') return 'cout';
-      if (expression.name === 'std::cerr' || expression.name === 'cerr') return 'cerr';
+      if (expression.name === 'std::cout' || expression.name === 'cout') return { kind: 'stdout' };
+      if (expression.name === 'std::cerr' || expression.name === 'cerr') return { kind: 'stderr' };
+
+      const binding = this.lookup(expression.name);
+      if (!binding) return null;
+      if (binding.type.name.includes('cerr')) return { kind: 'stderr' };
+      if (binding.type.name.includes('ostream')) return { kind: 'stdout' };
+      if (isStreamBuffer(binding.type)) return { kind: 'buffer', binding };
       return null;
     }
     if (expression.kind === 'binary' && expression.operator === '<<') {
-      return this.streamOf(expression.left);
+      return this.streamTargetOf(expression.left);
     }
     return null;
+  }
+
+  /**
+   * @brief Determines whether a runtime value is a user-defined class eligible for custom `operator<<`.
+   * @details Checks that the value is an aggregate struct that is not a standard container,
+   * standard string, pair, or stringstream buffer.
+   * @param value The evaluated runtime value.
+   * @return True if the value is a user-defined class instance, false otherwise.
+   */
+  private isUserStreamOperand(value: Value): boolean {
+    return (
+      value.kind === 'aggregate' &&
+      value.type.kind === 'struct' &&
+      !isStringType(value.type) &&
+      !isStreamBuffer(value.type) &&
+      !isPairType(value.type) &&
+      containerKindOf(value.type) === null
+    );
   }
 
   private streamName(value: Value | undefined): string {

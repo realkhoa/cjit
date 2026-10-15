@@ -59,7 +59,7 @@ export const STD_TYPE_NAMES: ReadonlySet<string> = new Set([
   'map', 'multimap', 'unordered_map',
   'stack', 'queue', 'priority_queue',
   'pair', 'tuple', 'array', 'optional', 'variant', 'complex',
-  'ostream', 'istream', 'iostream', 'stringstream',
+  'ostream', 'istream', 'iostream', 'stringstream', 'ostringstream', 'istringstream',
   'function', 'initializer_list',
 ]);
 

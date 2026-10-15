@@ -18,7 +18,7 @@ console below, VS 2022 dark theme. Two engines:
 |---|---|
 | Live | https://realkhoa.github.io/cjit/ |
 | Deploy | GitHub Actions → Pages (`worktree main`, `enablement: true`) |
-| Tests | **720 passing, 58 files** (`npm test`) |
+| Tests | **724 passing, 58 files** (`npm test`) |
 | Typecheck / build | both clean (`npm run typecheck`, `npm run build`) |
 | Last deploy | CI green, `index-aXOFXXco.js` |
 
@@ -79,15 +79,13 @@ Two suites run it:
   missing**, which is the case in CI, so **run it locally** (`npm run toolchain` first if needed). It has
   already caught **8 wrong expectations written by me** where the engine was right.
 
-Current state: **43 `fast` cases**, 3 gaps left:
+Current state: **45 `fast` cases**, 1 gap left:
 
 | Gap | What is missing |
 |---|---|
 | `function overloading` | two functions with one name; the engine refuses loudly instead of guessing |
-| `range-for over an initializer list` | `for (int v : {1, 2, 3})` |
-| `stringstream` | `std::ostringstream` / `.str()` |
 
-## 5. What is done (goal features 1–8)
+## 5. What is done (goal features 1–10)
 
 | # | Feature | Tests | Notes |
 |---|---|---|---|
@@ -99,6 +97,8 @@ Current state: **43 `fast` cases**, 3 gaps left:
 | 6 | Ctor/dtor, operator overloading, default args | `tests/classFeatures.test.ts` | destructors run at scope exit in reverse |
 | 7 | Lambdas, captures, `std::function` | `tests/lambdas.test.ts` | `[x]`, `[&x]`, `[=]`, `[&]`; lambdas as values |
 | 8 | `new`/`delete`, `std::sort` with a comparator, **class templates** | `tests/classTemplates.test.ts` + corpus | templates: several instantiations, two parameters, a container member, a self-referential pointer. **Methods of a class template are not supported** and warn |
+| 9 | Range-for over initializer lists | `tests/cpp.test.ts` + corpus | `for (int v : {1, 2, 3})`, typed or auto/reference |
+| 10 | `std::stringstream` / `std::ostringstream` | corpus | `out << text << int; out.str()`; shared buffer layout with std::string |
 
 Other shipped work (from earlier rounds, all deployed): projects (several in one workspace, each with its own
 files, recoverable project trash, `cjit.files.v3` with v1/v2 migration), data safety (file trash, non-destructive
@@ -164,7 +164,7 @@ tests/                       one file per feature; tests/conformance/ is the cor
 
 - **Methods of a class template** (`Box<T>::get()`): the instantiation carries data members only; using a
   method warns once and then fails visibly rather than returning an object that quietly lacks it.
-- **Function overloading**, **stringstream**, **range-for over an initializer list** (the three corpus gaps).
+- **Function overloading**, **stringstream** (the two remaining corpus gaps).
 - Beyond the corpus: **reference return types** (`int& f()`), **member-form operators**
   (`Number Number::operator+`), **`operator<<` for user types**, **out-of-class method definitions**,
   **`const`/`static` methods**, **inheritance/virtual**, `mutable` lambdas, default member initialisers in a
@@ -177,7 +177,7 @@ tests/                       one file per feature; tests/conformance/ is the cor
 ```powershell
 cd E:\sourcecode\cjit
 npm install            # if node_modules is missing
-npm test               # expect 720 passing
+npm test               # expect 723 passing
 npx vitest run tests/conformance.test.ts        # the work list
 npm run toolchain      # only if public/toolchain is missing (58 MB) - enables the clang comparison
 npx vitest run tests/conformanceVsClang.test.ts # the authority on what clang prints
