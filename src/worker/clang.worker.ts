@@ -51,9 +51,20 @@ function toolchainFiles(base: string) {
 
 let cachedRuntime: RuntimeLike | null = null;
 let cachedBase = '';
+/**
+ * The run whose output is being streamed.
+ *
+ * The runtime is created once and reused, so the output forwarder must not capture
+ * a request id from whichever run happened to create it: that made every run after
+ * the first post its output under the first run's id, which the engine then
+ * discarded as belonging to another request. The symptom was a second Run that
+ * showed the summary but none of the program's output.
+ */
+let activeRequestId = 0;
 
 async function handleRun(request: ClangRequest): Promise<void> {
   const { requestId } = request;
+  activeRequestId = requestId;
 
   try {
     if (!cachedRuntime || cachedBase !== request.toolchainBase) {
@@ -68,7 +79,9 @@ async function handleRun(request: ClangRequest): Promise<void> {
         files: toolchainFiles(request.toolchainBase),
         onOutput: (text, phase) => {
           const clean = stripAnsi(text);
-          if (clean.length > 0) post({ kind: 'output', requestId, phase, chunk: clean });
+          if (clean.length > 0) {
+            post({ kind: 'output', requestId: activeRequestId, phase, chunk: clean });
+          }
         },
       }) as unknown as RuntimeLike;
       cachedBase = request.toolchainBase;
