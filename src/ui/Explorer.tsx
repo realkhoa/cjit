@@ -3,10 +3,12 @@ import { languageForPath } from '@/state/fileStore';
 import { useAppStore } from '@/state/store';
 
 /**
- * Solution Explorer: the workspace's files, stored in the browser.
+ * Solution Explorer: the workspace's projects and their files, stored in the browser.
  *
  * Renaming happens in place rather than in a dialog, and deleting asks once
  * inline - both keep the panel usable without a modal for a two-second action.
+ * The project bar sits above the file list: switching projects is the outermost
+ * thing you do here, and it is one tap even on a phone.
  */
 export function Explorer() {
   const files = useAppStore((state) => state.files);
@@ -18,6 +20,15 @@ export function Explorer() {
   const trash = useAppStore((state) => state.trash);
   const restoreTrashed = useAppStore((state) => state.restoreTrashed);
   const emptyTrash = useAppStore((state) => state.emptyTrash);
+  const projects = useAppStore((state) => state.projects);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const projectTrash = useAppStore((state) => state.projectTrash);
+  const createProject = useAppStore((state) => state.createProject);
+  const switchProject = useAppStore((state) => state.switchProject);
+  const renameProject = useAppStore((state) => state.renameProject);
+  const deleteProject = useAppStore((state) => state.deleteProject);
+  const restoreTrashedProject = useAppStore((state) => state.restoreTrashedProject);
+  const emptyProjectTrash = useAppStore((state) => state.emptyProjectTrash);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -25,6 +36,13 @@ export function Explorer() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [trashOpen, setTrashOpen] = useState(false);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [projectDraft, setProjectDraft] = useState('');
+  const [projectAction, setProjectAction] = useState<'none' | 'new' | 'rename' | 'delete'>('none');
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [confirmEmptyProjects, setConfirmEmptyProjects] = useState(false);
+
+  const active = projects.find((project) => project.id === activeProjectId) ?? projects[0];
 
   const beginRename = (id: string, currentPath: string): void => {
     openFile(id);
@@ -41,6 +59,22 @@ export function Explorer() {
     }
     setRenamingId(null);
     setError(null);
+  };
+
+  const commitProjectAction = (): void => {
+    if (projectAction === 'new') {
+      createProject(projectDraft);
+      setProjectsOpen(false);
+    } else if (projectAction === 'rename' && active) {
+      const outcome = renameProject(active.id, projectDraft);
+      if (!outcome.ok) {
+        setProjectError(outcome.error ?? 'rename failed');
+        return;
+      }
+    }
+    setProjectAction('none');
+    setProjectDraft('');
+    setProjectError(null);
   };
 
   return (
@@ -65,6 +99,149 @@ export function Explorer() {
       {error ? <div className="explorer__error">{error}</div> : null}
 
       <div className="pane__body">
+        {/*
+          The project bar. Switching projects is the outermost thing you do in the
+          explorer, so it is a row above the files rather than a dialog.
+        */}
+        <div className="explorer__project">
+          <button
+            type="button"
+            className="explorer__project-current"
+            onClick={() => {
+              setProjectsOpen((open) => !open);
+              setProjectAction('none');
+              setProjectError(null);
+            }}
+            aria-expanded={projectsOpen}
+            aria-label={`Đổi project (đang mở: ${active?.name ?? 'project'})`}
+            title="Đổi project"
+          >
+            <span className="explorer__caret">{projectsOpen ? '▾' : '▸'}</span>
+            <span className="explorer__project-name">{active?.name ?? 'project'}</span>
+            <span className="watch__count">{projects.length}</span>
+          </button>
+        </div>
+
+        {projectsOpen ? (
+          <div className="explorer__projects">
+            <ul className="explorer__list">
+              {projects.map((project) => (
+                <li
+                  key={project.id}
+                  className={
+                    project.id === activeProjectId
+                      ? 'explorer__row explorer__row--active'
+                      : 'explorer__row'
+                  }
+                >
+                  <button
+                    type="button"
+                    className="explorer__name"
+                    onClick={() => {
+                      switchProject(project.id);
+                      setProjectsOpen(false);
+                    }}
+                    title={`Mở project "${project.name}"`}
+                  >
+                    {project.name}
+                  </button>
+                  <span className="watch__count">{project.files.length}</span>
+                </li>
+              ))}
+            </ul>
+
+            {projectAction === 'none' ? (
+              <div className="explorer__row explorer__row--actions">
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => {
+                    setProjectAction('new');
+                    setProjectDraft('');
+                  }}
+                >
+                  + New project
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  onClick={() => {
+                    setProjectAction('rename');
+                    setProjectDraft(active?.name ?? '');
+                  }}
+                >
+                  Rename
+                </button>
+                {projects.length > 1 ? (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => setProjectAction('delete')}
+                    title="Chuyển project vào Trash project"
+                  >
+                    Delete
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="explorer__project-form">
+                {projectAction === 'delete' ? (
+                  <span className="explorer__confirm">
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      onClick={() => {
+                        if (active) deleteProject(active.id);
+                        setProjectAction('none');
+                        setProjectsOpen(false);
+                      }}
+                    >
+                      Xoá project "{active?.name}"
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      onClick={() => setProjectAction('none')}
+                    >
+                      Huỷ
+                    </button>
+                  </span>
+                ) : (
+                  <>
+                    <input
+                      className="explorer__input"
+                      value={projectDraft}
+                      autoFocus
+                      spellCheck={false}
+                      aria-label="Project name"
+                      placeholder="tên project"
+                      onChange={(event) => setProjectDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') commitProjectAction();
+                        if (event.key === 'Escape') {
+                          setProjectAction('none');
+                          setProjectError(null);
+                        }
+                      }}
+                    />
+                    <button type="button" className="btn btn--small" onClick={commitProjectAction}>
+                      {projectAction === 'new' ? 'Tạo' : 'Lưu'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      onClick={() => setProjectAction('none')}
+                    >
+                      Huỷ
+                    </button>
+                  </>
+                )}
+                {projectError ? <span className="explorer__error">{projectError}</span> : null}
+              </div>
+            )}
+          </div>
+        ) : null}
+
         <ul className="explorer__list">
           {files.map((file) => {
             const active = file.id === activeFileId;
@@ -162,9 +339,10 @@ export function Explorer() {
         </ul>
 
         {/*
-          Trash: deleting and Reset put files here instead of destroying them, so
-          "nothing is ever wiped" is true rather than a promise. Emptying it is the
-          only action that really deletes, and it asks first.
+          Trash: deleting a file, deleting a project, and Reset all put things here
+          instead of destroying them, so "nothing is ever wiped" is true rather than
+          a promise. Emptying is the only action that really deletes, and it asks
+          first.
         */}
         <div className="explorer__trash">
           <button
@@ -172,16 +350,73 @@ export function Explorer() {
             className="explorer__trash-head"
             onClick={() => setTrashOpen((open) => !open)}
             aria-expanded={trashOpen}
-            disabled={trash.length === 0}
+            disabled={trash.length === 0 && projectTrash.length === 0}
             title={
-              trash.length === 0
+              trash.length === 0 && projectTrash.length === 0
                 ? 'Trash trống'
-                : `${trash.length} file đã xoá — mở để lấy lại`
+                : `${trash.length} file, ${projectTrash.length} project đã xoá — mở để lấy lại`
             }
           >
             <span>{trashOpen ? '▾' : '▸'} Trash</span>
-            {trash.length > 0 ? <span className="watch__count">{trash.length}</span> : null}
+            {trash.length + projectTrash.length > 0 ? (
+              <span className="watch__count">{trash.length + projectTrash.length}</span>
+            ) : null}
           </button>
+
+          {trashOpen && projectTrash.length > 0 ? (
+            <ul className="explorer__list">
+              {projectTrash.map((entry) => (
+                <li key={entry.id} className="explorer__row">
+                  <span
+                    className="explorer__name explorer__name--trashed"
+                    title={`project ${entry.name} · ${entry.files.length} file`}
+                  >
+                    📁 {entry.name}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => restoreTrashedProject(entry.id)}
+                    title={`Lấy lại project ${entry.name}`}
+                  >
+                    Restore
+                  </button>
+                </li>
+              ))}
+              <li className="explorer__row">
+                {confirmEmptyProjects ? (
+                  <span className="explorer__confirm">
+                    <button
+                      type="button"
+                      className="btn btn--small btn--danger"
+                      onClick={() => {
+                        emptyProjectTrash();
+                        setConfirmEmptyProjects(false);
+                      }}
+                    >
+                      Xoá hẳn {projectTrash.length} project
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      onClick={() => setConfirmEmptyProjects(false)}
+                    >
+                      Huỷ
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    onClick={() => setConfirmEmptyProjects(true)}
+                    title="Xoá vĩnh viễn các project trong Trash"
+                  >
+                    Empty project trash…
+                  </button>
+                )}
+              </li>
+            </ul>
+          ) : null}
 
           {trashOpen && trash.length > 0 ? (
             <ul className="explorer__list">

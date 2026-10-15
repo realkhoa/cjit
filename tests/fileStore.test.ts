@@ -166,53 +166,95 @@ describe('loading the workspace out of browser storage', () => {
     expect(loadFilesWorkspace(null)).toBeNull();
   });
 
-  it('migrates a v1 single-buffer workspace, inferring the language', () => {
+  it('migrates a v1 single-buffer workspace into the first project', () => {
     const cpp = fakeStorage({
       'cjit.workspace.v1': JSON.stringify({ version: 1, code: 'int main() { std::cout << 1; }' }),
     });
     const migrated = loadFilesWorkspace(cpp);
+    const files = migrated?.projects[0]?.files ?? [];
 
-    expect(migrated?.files).toHaveLength(1);
-    expect(migrated?.files[0]?.path).toBe('main.cpp');
-    expect(migrated?.files[0]?.language).toBe('cpp');
-    expect(migrated?.activeId).toBe(migrated?.files[0]?.id);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.path).toBe('main.cpp');
+    expect(files[0]?.language).toBe('cpp');
+    expect(migrated?.projects[0]?.activeId).toBe(files[0]?.id);
     // The code the user had is preserved, not discarded.
-    expect(migrated?.files[0]?.code).toContain('std::cout');
+    expect(files[0]?.code).toContain('std::cout');
 
     const c = fakeStorage({
       'cjit.workspace.v1': JSON.stringify({ version: 1, code: '#include <stdio.h>\nint main(void){}' }),
     });
-    expect(loadFilesWorkspace(c)?.files[0]?.path).toBe('main.c');
+    expect(loadFilesWorkspace(c)?.projects[0]?.files[0]?.path).toBe('main.c');
   });
 
-  it('prefers the v2 workspace when it exists', () => {
+  it('turns a v2 file list into one project, keeping the file trash', () => {
     const store = fakeStorage({
-      'cjit.workspace.v1': JSON.stringify({ version: 1, code: 'legacy' }),
       'cjit.files.v2': JSON.stringify({
         version: 2,
         files: [file('a', 'one.c', 'one'), file('b', 'two.cpp', 'two')],
         activeId: 'b',
+        trash: [{ ...file('c', 'gone.c', 'gone'), deletedAt: 7 }],
       }),
     });
 
     const loaded = loadFilesWorkspace(store);
-    expect(loaded?.files.map((item) => item.path)).toEqual(['one.c', 'two.cpp']);
-    expect(loaded?.activeId).toBe('b');
+    const project = loaded?.projects[0];
+
+    expect(project?.files.map((entry) => entry.path)).toEqual(['one.c', 'two.cpp']);
+    expect(project?.activeId).toBe('b');
+    expect(project?.name).toBe('main');
+    expect(loaded?.activeProjectId).toBe(project?.id);
+    // Files that were in the trash are still the user's, so they come across too.
+    expect(loaded?.trash?.map((entry) => entry.path)).toEqual(['gone.c']);
+    expect(loaded?.projectTrash).toEqual([]);
+  });
+
+  it('prefers the project workspace over the older shapes', () => {
+    const store = fakeStorage({
+      'cjit.files.v2': JSON.stringify({ version: 2, files: [file('old', 'old.cpp', 'old')], activeId: 'old' }),
+      'cjit.files.v3': JSON.stringify({
+        version: 3,
+        projects: [
+          { id: 'p1', name: 'bài tập', files: [file('a', 'a.cpp', 'A')], activeId: 'a' },
+          { id: 'p2', name: 'lab', files: [file('b', 'b.cpp', 'B')], activeId: 'b' },
+        ],
+        activeProjectId: 'p2',
+      }),
+    });
+
+    const loaded = loadFilesWorkspace(store);
+    expect(loaded?.projects.map((project) => project.name)).toEqual(['bài tập', 'lab']);
+    expect(loaded?.activeProjectId).toBe('p2');
+    // The old flat list is not merged in as a third project.
+    expect(loaded?.projects).toHaveLength(2);
   });
 
   it('falls back to the first file when the stored active id is gone', () => {
     const store = fakeStorage({
-      'cjit.files.v2': JSON.stringify({
-        version: 2,
-        files: [file('a', 'one.c', 'one')],
-        activeId: 'missing',
+      'cjit.files.v3': JSON.stringify({
+        version: 3,
+        projects: [{ id: 'p1', name: 'main', files: [file('a', 'one.c', 'one')], activeId: 'missing' }],
+        activeProjectId: 'p1',
       }),
     });
 
-    expect(loadFilesWorkspace(store)?.activeId).toBe('a');
+    expect(loadFilesWorkspace(store)?.projects[0]?.activeId).toBe('a');
   });
 
-  it('ignores unreadable or empty payloads instead of throwing', () => {
+  it('falls back to the first project when the active one is gone', () => {
+    const store = fakeStorage({
+      'cjit.files.v3': JSON.stringify({
+        version: 3,
+        projects: [{ id: 'p1', name: 'main', files: [file('a', 'one.c', 'one')], activeId: 'a' }],
+        activeProjectId: 'vanished',
+      }),
+    });
+
+    expect(loadFilesWorkspace(store)?.activeProjectId).toBe('p1');
+  });
+
+  it('ignores unreadable, empty or unusable payloads instead of throwing', () => {
+    expect(loadFilesWorkspace(fakeStorage({ 'cjit.files.v3': '{oops' }))).toBeNull();
+    expect(loadFilesWorkspace(fakeStorage({ 'cjit.files.v3': '{"projects":[]}' }))).toBeNull();
     expect(loadFilesWorkspace(fakeStorage({ 'cjit.files.v2': '{oops' }))).toBeNull();
     expect(loadFilesWorkspace(fakeStorage({ 'cjit.files.v2': '{"files":[]}' }))).toBeNull();
   });

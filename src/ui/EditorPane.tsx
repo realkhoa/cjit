@@ -161,7 +161,7 @@ export function EditorPane() {
     editor.addAction({
       id: 'cjit.resetWorkspace',
       label: 'C/C++ Studio: Reset workspace to the default example',
-      run: () => useAppStore.getState().resetWorkspace(),
+      run: () => useAppStore.getState().resetProject(),
     });
 
     editor.focus();

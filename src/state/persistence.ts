@@ -7,9 +7,13 @@
 
 import { languageForPath, validTrash } from '@/state/fileStore';
 import type { StoredFile, TrashedFile } from '@/state/fileStore';
+import { validProjectTrash, validProjects } from '@/state/projectStore';
+import type { Project, TrashedProject } from '@/state/projectStore';
 
 const STORAGE_KEY = 'cjit.workspace.v1';
-const FILES_KEY = 'cjit.files.v2';
+/** The project shape. `v2` below is read once, to migrate from it. */
+const FILES_KEY = 'cjit.files.v3';
+const LEGACY_FILES_KEY = 'cjit.files.v2';
 const SAVE_DEBOUNCE_MS = 400;
 
 export interface PersistedWorkspace {
@@ -25,11 +29,22 @@ export interface PersistedWorkspace {
   readonly inlineValues?: boolean;
 }
 
+/** What the app now stores: several projects, each with its own files. */
 export interface PersistedFiles {
-  readonly version: 2;
-  readonly files: readonly StoredFile[];
-  readonly activeId: string;
+  readonly version: 3;
+  readonly projects: readonly Project[];
+  readonly activeProjectId: string;
   /** Removed files, kept so deleting or resetting can be undone. */
+  readonly trash?: readonly TrashedFile[];
+  /** Removed projects, kept whole so deleting one can be undone. */
+  readonly projectTrash?: readonly TrashedProject[];
+}
+
+/** The shape v2 wrote: one flat file list, which becomes the first project. */
+interface LegacyPersistedFiles {
+  readonly version?: number;
+  readonly files?: readonly StoredFile[];
+  readonly activeId?: string;
   readonly trash?: readonly TrashedFile[];
 }
 
@@ -101,8 +116,12 @@ export function clearWorkspace(): void {
 // --------------------------------------------------------------- files (v2)
 
 /**
- * Loads the file workspace, migrating a v1 single-buffer workspace if that is all
- * that exists - otherwise an upgrade would silently discard the user's code.
+ * Loads the workspace: projects, the trash, and enough migration to never lose code.
+ *
+ * Three shapes have existed. v1 was a single buffer, v2 a flat file list, and v3 adds
+ * projects. Each older one is wrapped into the newer shape rather than discarded -
+ * upgrading must never cost someone their work, and a stale key is cheaper than a
+ * lost program.
  */
 export function loadFilesWorkspace(store: StorageLike | null = storage()): PersistedFiles | null {
   if (!store) return null;
@@ -113,14 +132,48 @@ export function loadFilesWorkspace(store: StorageLike | null = storage()): Persi
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== 'object' || parsed === null) return null;
       const candidate = parsed as Partial<PersistedFiles>;
-      const files = Array.isArray(candidate.files) ? candidate.files : [];
-      if (files.length === 0) return null;
 
-      const activeId =
-        typeof candidate.activeId === 'string' && files.some((file) => file.id === candidate.activeId)
-          ? candidate.activeId
-          : (files[0]?.id ?? '');
-      return { version: 2, files, activeId, trash: validTrash(candidate.trash) };
+      const projects = validProjects(candidate.projects);
+      if (projects.length === 0) return null;
+
+      const activeProjectId =
+        typeof candidate.activeProjectId === 'string' &&
+        projects.some((project) => project.id === candidate.activeProjectId)
+          ? candidate.activeProjectId
+          : (projects[0]?.id ?? '');
+
+      return {
+        version: 3,
+        projects,
+        activeProjectId,
+        trash: validTrash(candidate.trash),
+        projectTrash: validProjectTrash(candidate.projectTrash),
+      };
+    }
+
+    // v2: the file list *was* the workspace, so it becomes the first project.
+    const v2 = store.getItem(LEGACY_FILES_KEY);
+    if (v2) {
+      const parsed: unknown = JSON.parse(v2);
+      if (typeof parsed === 'object' && parsed !== null) {
+        const candidate = parsed as Partial<LegacyPersistedFiles>;
+        const files = Array.isArray(candidate.files) ? candidate.files : [];
+        if (files.length > 0) {
+          const projects = validProjects([
+            { id: 'project-1', name: 'main', files, activeId: candidate.activeId },
+          ]);
+          if (projects.length > 0) {
+            return {
+              version: 3,
+              projects,
+              activeProjectId: projects[0]?.id ?? 'project-1',
+              // The old file trash carries over: those files are still the user's.
+              trash: validTrash(candidate.trash),
+              projectTrash: [],
+            };
+          }
+        }
+      }
     }
 
     const legacy = store.getItem(STORAGE_KEY);
@@ -133,10 +186,15 @@ export function loadFilesWorkspace(store: StorageLike | null = storage()): Persi
 
     // The extension was not recorded in v1, so it is inferred from the content.
     const path = looksLikeCpp(code) ? 'main.cpp' : 'main.c';
+    const files = [
+      { id: 'migrated-1', path, language: languageForPath(path), code, updatedAt: Date.now() },
+    ];
     return {
-      version: 2,
-      files: [{ id: 'migrated-1', path, language: languageForPath(path), code, updatedAt: Date.now() }],
-      activeId: 'migrated-1',
+      version: 3,
+      projects: [{ id: 'project-1', name: 'main', files, activeId: 'migrated-1' }],
+      activeProjectId: 'project-1',
+      trash: [],
+      projectTrash: [],
     };
   } catch {
     return null;

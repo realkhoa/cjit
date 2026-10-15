@@ -12,7 +12,7 @@ export function SettingsDialog({ onClose }: { readonly onClose: () => void }) {
   const setDebounceMs = useAppStore((state) => state.setDebounceMs);
   const toggleMinimap = useAppStore((state) => state.toggleMinimap);
   const toggleInlineValues = useAppStore((state) => state.toggleInlineValues);
-  const resetWorkspace = useAppStore((state) => state.resetWorkspace);
+  const resetProject = useAppStore((state) => state.resetProject);
   const exportWorkspace = useAppStore((state) => state.exportWorkspace);
   const importWorkspace = useAppStore((state) => state.importWorkspace);
   const trash = useAppStore((state) => state.trash);
@@ -86,11 +86,11 @@ export function SettingsDialog({ onClose }: { readonly onClose: () => void }) {
                   type="button"
                   className="btn btn--danger"
                   onClick={() => {
-                    resetWorkspace();
+                    resetProject();
                     setConfirmReset(false);
                   }}
                 >
-                  Xoá hết và về ví dụ mặc định
+                  Xoá file hiện tại và về ví dụ mặc định
                 </button>
                 <button type="button" className="btn" onClick={() => setConfirmReset(false)}>
                   Huỷ

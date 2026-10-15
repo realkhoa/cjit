@@ -205,7 +205,27 @@ operation thì báo chưa hỗ trợ.
 "subscript on a non-pointer value", một lỗi giấu nguyên nhân của chính nó). Chúng dùng chung layout có thứ tự: chuẩn **không hứa** thứ tự duyệt nào,
 nên hiển thị một thứ tự xác định là hợp lệ. API bucket/hash (`bucket_count`, `load_factor`…) **chưa có** và báo thẳng là không có member.
 
-### Project: nhiều file, một entry point
+### Project: nhiều project, mỗi project nhiều file
+
+Explorer có **project bar** ở trên danh sách file: bấm để đổi project, `+ New project`, `Rename`, `Delete`. Mỗi project giữ **file riêng** và **file đang mở
+riêng**, nên chuyển qua lại không mất ngữ cảnh.
+
+| Việc | Hành vi |
+|---|---|
+| Đổi project | một tap; file của project kia quay lại đúng file đang mở trước đó |
+| Tạo project | có sẵn `main.cpp` là chương trình (Run được ngay); trùng tên thì thành `main-2` |
+| Đổi tên | trùng tên thì tự lấy tên trống; tên có ký tự đường dẫn (`/`) bị từ chối kèm lý do |
+| Xoá project | vào **Trash project** (giữ nguyên toàn bộ file), Restore lấy lại; **không xoá được project cuối cùng** |
+| Empty project trash | hành động duy nhất không hoàn tác được, và nó hỏi trước |
+
+**Migrate không mất gì**: workspace cũ (v1 một buffer, v2 danh sách file phẳng) được đọc và **gói thành project đầu tiên** — kể cả file đang nằm trong
+Trash. Backup cũng vậy: format 1 (danh sách file) vẫn đọc được thành một project tên `imported`. `Export workspace` giờ xuất **mọi project**; `Import`
+**thêm** project vào workspace hiện tại (không thay thế), tên project trùng thì tự lấy tên trống.
+
+`Reset project` chỉ reset **project đang mở** về ví dụ mặc định và đưa file cũ vào Trash — trước đây nó xoá cả storage, tức là sẽ xoá luôn mọi project
+khác, nên đã bỏ hẳn đường đó.
+
+### Project: một entry point cho mỗi lần Run
 
 Default workspace là **cả project**: `main.cpp` (tour STL: container, algorithm, string, template), `util.h` (module có `#pragma once`, không có
 `main`) và `hello.c` (printf trong vòng lặp). File mới tạo cũng theo đúng hình đó: `#pragma once`, không `main`.

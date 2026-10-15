@@ -8,8 +8,6 @@ import { DebouncedAnalyzer } from '@/state/analyzeController';
 import {
   createFile as createStoredFile,
   findFile,
-  initialProjectWorkspace,
-  initialWorkspace,
   languageForPath,
   renameFile,
   restoreTrashed as restoreTrashedFile,
@@ -18,15 +16,29 @@ import {
   uniquePath,
   updateFileCode,
 } from '@/state/fileStore';
-import type { FileLanguage, FilesWorkspace, StoredFile, TrashedFile } from '@/state/fileStore';
+import type { FileLanguage, StoredFile, TrashedFile } from '@/state/fileStore';
 import {
-  clearFilesWorkspace,
+  activeProject,
+  addFileToProject,
+  findProject,
+  MAX_PROJECTS,
+  newProject,
+  restoreProject,
+  switchProject,
+  trashProject,
+  uniqueProjectName,
+  validateProjectName,
+  withProject,
+} from '@/state/projectStore';
+import type { Project, ProjectWorkspace, TrashedProject } from '@/state/projectStore';
+import {
   loadFilesWorkspace,
   loadWorkspace,
   scheduleFilesSave,
   scheduleWorkspaceSave,
   setPersistFailureHandler,
 } from '@/state/persistence';
+import type { PersistedFiles } from '@/state/persistence';
 import { clampDebounce, clampFontSize, settingsFrom } from '@/state/settings';
 import type { EditorSettings } from '@/state/settings';
 import { isMobileViewport } from '@/ui/responsive';
@@ -47,9 +59,10 @@ import {
   workspaceFromShare,
 } from '@/state/share';
 import { formatBytes, saveBytes } from '@/util/download';
+import { MAX_TRASHED_FILES } from '@/state/fileStore';
 import {
   backupFileName,
-  mergeBackup,
+  mergeBackupFiles,
   parseWorkspaceJson,
   workspaceToJson,
 } from '@/state/workspaceBackup';
@@ -110,6 +123,15 @@ export interface AppState {
    * active file, kept so the editor, engine and status bar do not have to know
    * about the file list.
    */
+  /**
+   * The workspace: several projects, one of them active.
+   *
+   * `files`, `activeFileId`, `path`, `language` and `code` are mirrors of the active
+   * project, so everything that already read them - the editor, the watch pane, the
+   * preprocessor - carries on unchanged.
+   */
+  readonly projects: readonly Project[];
+  readonly activeProjectId: string;
   readonly files: readonly StoredFile[];
   readonly activeFileId: string;
   readonly path: string;
@@ -140,6 +162,8 @@ export interface AppState {
    * trash. Nothing is destroyed by accident.
    */
   readonly trash: readonly TrashedFile[];
+  /** Projects that were deleted, kept whole until the trash is emptied. */
+  readonly projectTrash: readonly TrashedProject[];
   /** Set when the browser refuses to save, so the user is warned before losing work. */
   readonly storageWarning: string | null;
   /**
@@ -177,13 +201,23 @@ export interface AppState {
   /** Brings a trashed file back under a free name. */
   restoreTrashed(id: string): void;
   emptyTrash(): void;
-  /** Writes the whole workspace out as a file, for keeping outside the browser. */
+  /** Writes the whole workspace - every project - out as a file. */
   exportWorkspace(): void;
-  /** Adds a backup's files to the workspace; never replaces what is here. */
+  /** Adds a backup's projects to the workspace; never replaces what is here. */
   importWorkspace(
     text: string,
-  ): { ok: boolean; added?: number; skipped?: number; error?: string };
-  resetWorkspace(): void;
+  ): { ok: boolean; added?: number; files?: number; skipped?: number; error?: string };
+  /** Resets the active project to the bundled sample; the old files go to the trash. */
+  resetProject(): void;
+  /** Makes a project, and switches to it. */
+  createProject(name?: string): void;
+  switchProject(id: string): void;
+  /** Renames a project; returns the name it actually got, since names are unique. */
+  renameProject(id: string, name: string): { ok: boolean; name?: string; error?: string };
+  /** Moves a project to the project trash; never the last one. */
+  deleteProject(id: string): void;
+  restoreTrashedProject(id: string): void;
+  emptyProjectTrash(): void;
   shareLink(): Promise<{ ok: boolean; url?: string; error?: string }>;
   /** Loads a workspace out of the URL fragment; true when one was found. */
   loadSharedWorkspace(): Promise<boolean>;
@@ -220,6 +254,11 @@ function nextFileId(): string {
   return `file-${Date.now().toString(36)}-${fileSeq}`;
 }
 
+function nextProjectId(): string {
+  fileSeq += 1;
+  return `project-${Date.now().toString(36)}-${fileSeq}`;
+}
+
 /**
  * The workspace to start from: what the browser stored, or the bundled project.
  *
@@ -227,18 +266,71 @@ function nextFileId(): string {
  * the explorer, the multi-file include resolution and the entry-point rule are all
  * visible from the first second.
  */
-function initialFiles(): FilesWorkspace & { readonly trash: readonly TrashedFile[] } {
+function initialWorkspaceState(): PersistedFiles {
   const stored = loadFilesWorkspace();
-  if (stored) return { ...stored, trash: stored.trash ?? [] };
+  if (stored) return stored;
+
+  const files: readonly StoredFile[] = EXAMPLES.map((file, index) => ({
+    id: `file-${index + 1}`,
+    path: file.path,
+    language: file.language,
+    code: file.code,
+    updatedAt: Date.now(),
+  }));
+
   return {
-    ...initialProjectWorkspace(
-      EXAMPLES.map((file) => ({ path: file.path, code: file.code })),
-      (index) => `file-${index + 1}`,
-      Date.now(),
-      { path: DEFAULT_EXAMPLE.path, code: DEFAULT_EXAMPLE.code },
-    ),
+    version: 3,
+    projects: [{ id: 'project-1', name: 'main', files, activeId: files[0]?.id ?? '' }],
+    activeProjectId: 'project-1',
     trash: [],
+    projectTrash: [],
   };
+}
+
+const startWorkspace = initialWorkspaceState();
+
+/** The active project, plus the mirrors the rest of the app reads. */
+function projectState(workspace: ProjectWorkspace): {
+  projects: readonly Project[];
+  activeProjectId: string;
+  files: readonly StoredFile[];
+  activeFileId: string;
+  path: string;
+  language: FileLanguage;
+  code: string;
+} {
+  const project = activeProject(workspace);
+  const files = project?.files ?? [];
+  const activeId = project?.activeId ?? files[0]?.id ?? '';
+
+  return {
+    projects: workspace.projects,
+    activeProjectId: workspace.activeProjectId,
+    files,
+    activeFileId: activeId,
+    ...derived(files, activeId),
+  };
+}
+
+/** The active project with different files: how every file action writes back. */
+function withActiveFiles(
+  state: AppState,
+  files: readonly StoredFile[],
+  activeId?: string,
+): ProjectWorkspace {
+  const workspace: ProjectWorkspace = {
+    projects: state.projects,
+    activeProjectId: state.activeProjectId,
+  };
+  const project = activeProject(workspace);
+  if (!project) return workspace;
+
+  const wanted = activeId ?? project.activeId;
+  return withProject(workspace, {
+    ...project,
+    files,
+    activeId: files.some((file) => file.id === wanted) ? wanted : (files[0]?.id ?? ''),
+  });
 }
 
 function derived(
@@ -260,12 +352,11 @@ function workspaceFiles(state: AppState): readonly SourceFile[] {
     .map((file) => ({ path: file.path, code: file.code }));
 }
 
-const startFiles = initialFiles();
-
 export const useAppStore = create<AppState>()((set, get) => ({
-  files: startFiles.files,
-  activeFileId: startFiles.activeId,
-  ...derived(startFiles.files, startFiles.activeId),
+  ...projectState({
+    projects: startWorkspace.projects,
+    activeProjectId: startWorkspace.activeProjectId,
+  }),
   codeRevision: 0,
   stdin: persisted.stdin ?? '',
   engineId: PREFERRED_RUN_ENGINE_ID,
@@ -295,7 +386,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   cursor: { line: 1, column: 1, selected: 0 },
   settings: settingsFrom(persisted),
   mobilePane: 'code',
-  trash: startFiles.trash,
+  trash: startWorkspace.trash ?? [],
+  projectTrash: startWorkspace.projectTrash ?? [],
   storageWarning: null,
   watchMode: 'cursor',
   timelineIndex: 0,
@@ -303,119 +395,117 @@ export const useAppStore = create<AppState>()((set, get) => ({
   artifactsReady: false,
 
   setCodeFromEditor(code) {
-    const { files, activeFileId } = get();
-    set({ code, files: updateFileCode(files, activeFileId, code, Date.now()) });
+    const state = get();
+    const next = updateFileCode(state.files, state.activeFileId, code, Date.now());
+    set(projectState(withActiveFiles(state, next, state.activeFileId)));
     analyzer.schedule(code);
   },
 
   openExample(path, language, code) {
     /*
-     * Opens the example as a NEW file, never by writing over the one that is open.
+     * Opens the example as a NEW file in the active project, never by writing over
+     * the file that is open.
      *
      * The old version replaced the active file's path and contents, so picking an
-     * example from the toolbar silently destroyed whatever the user had written -
-     * no confirmation, no undo. Opening a file cannot lose work, whether or not
-     * the example is ever offered in the UI again.
+     * example silently destroyed whatever the user had written - no confirmation, no
+     * undo. Opening a file cannot lose work, whether or not the example is ever
+     * offered in the UI again.
      */
-    const { files } = get();
-    const created = createStoredFile(files, {
-      id: nextFileId(),
-      now: Date.now(),
-      path,
-      code,
-    });
-    const opened =
-      created.language === language ? created : { ...created, language, path: created.path };
-    const next = [...files, opened];
+    const state = get();
+    const project = activeProject({
+      projects: state.projects,
+      activeProjectId: state.activeProjectId,
+    }) ?? {
+      id: state.activeProjectId,
+      name: 'main',
+      files: state.files,
+      activeId: state.activeFileId,
+    };
+    const opened = addFileToProject(project, path, code, nextFileId(), Date.now());
+    const withNewFile = opened.files[opened.files.length - 1];
+    // A caller that knows the language better than the extension does wins.
+    const files = opened.files.map((file) =>
+      file.id === withNewFile?.id && file.language !== language ? { ...file, language } : file,
+    );
 
-    set((state) => ({
-      files: next,
-      activeFileId: opened.id,
-      ...derived(next, opened.id),
+    set({
+      ...projectState(withActiveFiles(state, files, withNewFile?.id)),
       codeRevision: state.codeRevision + 1,
-      output: [line('system', `> Opened ${opened.path} as a new file`)],
+      output: [line('system', `> Opened ${withNewFile?.path ?? path} as a new file`)],
       consoleTab: 'output',
-      watch: emptyWatch({ detail: `Đang chờ phân tích ${opened.path}…` }),
-    }));
-    analyzer.schedule(opened.code);
+      watch: emptyWatch({ detail: `Đang chờ phân tích ${withNewFile?.path ?? path}…` }),
+    });
+    analyzer.schedule(get().code);
   },
 
   createFile() {
-    const { files } = get();
-    const created = createStoredFile(files, {
+    const state = get();
+    const created = createStoredFile(state.files, {
       id: nextFileId(),
       now: Date.now(),
       path: 'untitled.c',
     });
-    const next = [...files, created];
-    set((state) => ({
-      files: next,
-      activeFileId: created.id,
-      ...derived(next, created.id),
+    const next = [...state.files, created];
+
+    set({
+      ...projectState(withActiveFiles(state, next, created.id)),
       codeRevision: state.codeRevision + 1,
-    }));
+    });
     analyzer.schedule(get().code);
   },
 
   openFile(id) {
-    const { files, activeFileId } = get();
-    if (id === activeFileId || !findFile(files, id)) return;
-    set((state) => ({
-      activeFileId: id,
-      ...derived(files, id),
+    const state = get();
+    if (id === state.activeFileId || !findFile(state.files, id)) return;
+    set({
+      ...projectState(withActiveFiles(state, state.files, id)),
       codeRevision: state.codeRevision + 1,
-    }));
+    });
     analyzer.schedule(get().code);
   },
 
   renameActiveFile(path) {
-    const { files, activeFileId } = get();
-    const result = renameFile(files, activeFileId, path, Date.now());
+    const state = get();
+    const result = renameFile(state.files, state.activeFileId, path, Date.now());
     if (result.error) return { ok: false, error: result.error };
-    set((state) => ({
-      files: result.files,
-      ...derived(result.files, activeFileId),
+
+    set({
+      ...projectState(withActiveFiles(state, result.files, state.activeFileId)),
       codeRevision: state.codeRevision + 1,
-    }));
+    });
     return { ok: true };
   },
 
   deleteActiveFile() {
-    const { files, activeFileId, trash } = get();
-    // The last file is never removed: an empty workspace has nothing to type in.
-    if (files.length <= 1) return;
+    const state = get();
+    // The last file is never removed: an empty project has nothing to type in.
+    if (state.files.length <= 1) return;
 
     // Into the trash, not into oblivion: deleting is undoable from the Explorer.
-    const moved = trashFile(files, trash, activeFileId, Date.now());
+    const moved = trashFile(state.files, state.trash, state.activeFileId, Date.now());
     const nextActive = moved.files[0]?.id ?? '';
 
-    set((state) => ({
-      files: moved.files,
+    set({
+      ...projectState(withActiveFiles(state, moved.files, nextActive)),
       trash: moved.trash,
-      activeFileId: nextActive,
-      ...derived(moved.files, nextActive),
       codeRevision: state.codeRevision + 1,
-      output: [
-        line('system', '> Đã chuyển file vào Trash (mở Explorer để lấy lại nếu cần)'),
-      ],
-    }));
+      output: [line('system', '> Đã chuyển file vào Trash (mở Explorer để lấy lại nếu cần)')],
+    });
     analyzer.schedule(get().code);
   },
 
   restoreTrashed(id) {
-    const { files, trash } = get();
-    const result = restoreTrashedFile(files, trash, id, Date.now());
+    const state = get();
+    const result = restoreTrashedFile(state.files, state.trash, id, Date.now());
     const restored = result.restored;
     if (!restored) return;
 
-    set((state) => ({
-      files: result.files,
+    set({
+      ...projectState(withActiveFiles(state, result.files, restored.id)),
       trash: result.trash,
-      activeFileId: restored.id,
-      ...derived(result.files, restored.id),
       codeRevision: state.codeRevision + 1,
       output: [line('system', `> Đã lấy lại ${restored.path} từ Trash`)],
-    }));
+    });
     analyzer.schedule(get().code);
   },
 
@@ -424,15 +514,137 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ trash: [] });
   },
 
+  // ------------------------------------------------------------- projects
+
+  createProject(name) {
+    const state = get();
+    if (state.projects.length >= MAX_PROJECTS) {
+      get().appendOutput('stderr', `> Chỉ tạo được tối đa ${MAX_PROJECTS} project`);
+      return;
+    }
+
+    const wanted = (name ?? '').trim() || `project ${state.projects.length + 1}`;
+    const project = newProject(
+      nextProjectId(),
+      uniqueProjectName(state.projects, wanted),
+      nextFileId(),
+      Date.now(),
+    );
+    const workspace = {
+      projects: [...state.projects, project],
+      activeProjectId: project.id,
+    };
+
+    set({
+      ...projectState(workspace),
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', `> Đã tạo project "${project.name}" (1 file main.cpp)`)],
+      consoleTab: 'output',
+    });
+    analyzer.schedule(get().code);
+  },
+
+  switchProject(id) {
+    const state = get();
+    if (id === state.activeProjectId) return;
+    if (!findProject(state.projects, id)) return;
+
+    const workspace = switchProject(
+      { projects: state.projects, activeProjectId: state.activeProjectId },
+      id,
+    );
+    const project = activeProject(workspace);
+
+    set({
+      ...projectState(workspace),
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', `> Đang mở project "${project?.name ?? id}"`)],
+    });
+    analyzer.schedule(get().code);
+  },
+
+  renameProject(id, name) {
+    const state = get();
+    const project = findProject(state.projects, id);
+    if (!project) return { ok: false, error: 'project không tồn tại' };
+
+    const error = validateProjectName(name);
+    if (error) return { ok: false, error };
+
+    const renamed = { ...project, name: uniqueProjectName(state.projects, name, id) };
+    const workspace = withProject(
+      { projects: state.projects, activeProjectId: state.activeProjectId },
+      renamed,
+    );
+
+    set({
+      ...projectState(workspace),
+      output: [line('system', `> Project đổi tên thành "${renamed.name}"`)],
+    });
+    return { ok: true, name: renamed.name };
+  },
+
+  deleteProject(id) {
+    const state = get();
+    const result = trashProject(
+      { projects: state.projects, activeProjectId: state.activeProjectId },
+      state.projectTrash,
+      id,
+      Date.now(),
+    );
+
+    if (!result.removed) {
+      get().appendOutput('stderr', '> Không xoá được project cuối cùng — workspace luôn có ít nhất 1 project');
+      return;
+    }
+
+    const name = findProject(state.projects, id)?.name ?? id;
+    set({
+      ...projectState(result.workspace),
+      projectTrash: result.trash,
+      codeRevision: state.codeRevision + 1,
+      output: [
+        line('system', `> Đã chuyển project "${name}" vào Trash project (lấy lại được ở Explorer)`),
+      ],
+    });
+    analyzer.schedule(get().code);
+  },
+
+  restoreTrashedProject(id) {
+    const state = get();
+    const result = restoreProject(
+      { projects: state.projects, activeProjectId: state.activeProjectId },
+      state.projectTrash,
+      id,
+      Date.now(),
+    );
+    if (!result.restored) return;
+
+    set({
+      ...projectState(result.workspace),
+      projectTrash: result.trash,
+      codeRevision: state.codeRevision + 1,
+      output: [line('system', `> Đã lấy lại project "${result.restored.name}"`)],
+    });
+    analyzer.schedule(get().code);
+  },
+
+  emptyProjectTrash() {
+    set({ projectTrash: [] });
+  },
+
   exportWorkspace() {
-    const { files, trash } = get();
+    const { projects, trash, projectTrash } = get();
     const name = backupFileName();
-    const saved = saveBytes(name, new TextEncoder().encode(workspaceToJson(files, trash)));
+    const saved = saveBytes(
+      name,
+      new TextEncoder().encode(workspaceToJson(projects, trash, projectTrash)),
+    );
 
     get().appendOutput(
       'system',
       saved
-        ? `> Đã tải bản sao lưu ${name} (${files.length} file) — giữ file này ở đâu đó ngoài browser`
+        ? `> Đã tải bản sao lưu ${name} (${projects.length} project) — giữ file này ở đâu đó ngoài browser`
         : '> Không tạo được file sao lưu trong môi trường này',
     );
   },
@@ -444,57 +656,111 @@ export const useAppStore = create<AppState>()((set, get) => ({
       return { ok: false, error: parsed.error };
     }
 
-    // Added to the workspace, never swapped in for it.
-    const existing = get().files;
-    const incoming = mergeBackup(
-      parsed.backup,
-      (index) => `imported-${Date.now().toString(36)}-${index}`,
-      (path) => uniquePath([...existing, ...get().files.filter((file) => file.id.startsWith('imported-'))], path),
-    );
+    // Added to the workspace, never swapped in for it: a backup cannot cost you the
+    // project you are in.
+    const state = get();
+    const takenPaths = [...state.files];
+    const now = Date.now();
 
-    const merged = [...existing, ...incoming];
-    const first = incoming[0];
-    set((state) => ({
-      files: merged,
-      activeFileId: first?.id ?? state.activeFileId,
-      ...derived(merged, first?.id ?? state.activeFileId),
+    const incoming: Project[] = parsed.backup.projects.map((project, index) => {
+      const id = `imported-${now.toString(36)}-${index}`;
+      const files = mergeBackupFiles(
+        project,
+        (fileIndex) => `${id}-f${fileIndex}`,
+        (path) => {
+          const free = uniquePath(takenPaths, path);
+          takenPaths.push({ id: free, path: free, language: 'cpp', code: '', updatedAt: now });
+          return free;
+        },
+        languageForPath,
+        now,
+      );
+      return {
+        id,
+        name: uniqueProjectName(state.projects, project.name),
+        files,
+        activeId: files[0]?.id ?? '',
+      };
+    });
+
+    if (incoming.length === 0) {
+      get().appendOutput('stderr', '> Backup không có project nào dùng được');
+      return { ok: false, error: 'backup không có project nào dùng được' };
+    }
+
+    const workspace = {
+      projects: [...state.projects, ...incoming],
+      activeProjectId: incoming[0]?.id ?? state.activeProjectId,
+    };
+    const filesAdded = incoming.reduce((total, project) => total + project.files.length, 0);
+
+    // Files that were in the backup's trash keep being recoverable here.
+    const restoredTrash: TrashedFile[] = parsed.backup.trash.map((file, index) => ({
+      id: `imported-trash-${now.toString(36)}-${index}`,
+      path: file.path,
+      language: languageForPath(file.path),
+      code: file.code,
+      updatedAt: now,
+      deletedAt: now,
+    }));
+
+    set({
+      ...projectState(workspace),
+      trash: [...state.trash, ...restoredTrash].slice(-MAX_TRASHED_FILES),
       codeRevision: state.codeRevision + 1,
       output: [
         line(
           'system',
-          `> Đã nhập ${incoming.length} file từ backup (giữ nguyên ${existing.length} file đang có)` +
+          `> Đã nhập ${incoming.length} project / ${filesAdded} file (giữ nguyên ${state.projects.length} project đang có)` +
             (parsed.backup.skipped > 0 ? ` · bỏ qua ${parsed.backup.skipped} mục không hợp lệ` : ''),
         ),
       ],
       consoleTab: 'output',
-    }));
+    });
     analyzer.schedule(get().code);
-    return { ok: true, added: incoming.length, skipped: parsed.backup.skipped };
+    return { ok: true, added: incoming.length, files: filesAdded, skipped: parsed.backup.skipped };
   },
 
-  resetWorkspace() {
-    const { files, trash } = get();
-
-    // Forget what the browser stored, or a reload would bring it back - but keep
-    // the files themselves in the trash, so Reset is undoable too.
-    clearFilesWorkspace();
-
-    const kept = trashAll(files, trash, Date.now());
-    const fresh = initialWorkspace(nextFileId(), Date.now(), {
-      path: DEFAULT_EXAMPLE.path,
-      code: DEFAULT_EXAMPLE.code,
+  resetProject() {
+    const state = get();
+    const project = activeProject({
+      projects: state.projects,
+      activeProjectId: state.activeProjectId,
     });
-    set((state) => ({
-      files: fresh.files,
+    if (!project) return;
+
+    /*
+     * Resets the *project*, and does not touch the stored workspace: clearing the
+     * storage would take every other project with it. The files it replaces go to the
+     * trash, so this is undoable too.
+     */
+    const kept = trashAll(state.files, state.trash, Date.now());
+    const now = Date.now();
+    const fresh: StoredFile[] = EXAMPLES.map((file, index) => ({
+      id: nextFileId(),
+      path: file.path,
+      language: file.language,
+      code: file.code,
+      updatedAt: now + index,
+    }));
+
+    const workspace = withProject(
+      { projects: state.projects, activeProjectId: state.activeProjectId },
+      { ...project, files: fresh, activeId: fresh[0]?.id ?? '' },
+    );
+
+    set({
+      ...projectState(workspace),
       trash: kept,
-      activeFileId: fresh.activeId,
-      ...derived(fresh.files, fresh.activeId),
       codeRevision: state.codeRevision + 1,
       output: [
-        line('system', `> Workspace reset — ${files.length} file cũ vẫn nằm trong Trash (Explorer)`),
+        line(
+          'system',
+          `> Đã reset project "${project.name}" về ví dụ mặc định — ${state.files.length} file cũ vẫn nằm trong Trash`,
+        ),
       ],
       consoleTab: 'output',
-    }));
+    });
     analyzer.schedule(get().code);
   },
 
@@ -899,15 +1165,17 @@ export function cancelAnalysis(): void {
 
 useAppStore.subscribe((state, previous) => {
   if (
-    state.files !== previous.files ||
-    state.activeFileId !== previous.activeFileId ||
-    state.trash !== previous.trash
+    state.projects !== previous.projects ||
+    state.activeProjectId !== previous.activeProjectId ||
+    state.trash !== previous.trash ||
+    state.projectTrash !== previous.projectTrash
   ) {
     scheduleFilesSave({
-      version: 2,
-      files: state.files,
-      activeId: state.activeFileId,
+      version: 3,
+      projects: state.projects,
+      activeProjectId: state.activeProjectId,
       trash: state.trash,
+      projectTrash: state.projectTrash,
     });
   }
 

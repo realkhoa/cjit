@@ -154,18 +154,31 @@ describe('deleting a file is undoable', () => {
   });
 });
 
-describe('resetting the workspace is undoable', () => {
-  it('keeps the old files in the trash', () => {
-    useAppStore.getState().resetWorkspace();
+describe('resetting a project is undoable', () => {
+  it('keeps the old files in the trash and restores the bundled sample', () => {
+    useAppStore.getState().resetProject();
 
     const state = useAppStore.getState();
-    expect(state.files).toHaveLength(1);
+    // The project goes back to the bundled sample, which is a project: three files
+    // including the module the tour includes.
+    expect(state.files.map((file) => file.path)).toEqual(['main.cpp', 'util.h', 'hello.c']);
     const entry = state.trash.find((candidate) => candidate.code === MINE);
     expect(entry?.path).toBe('main.cpp');
   });
 
+  it('does not touch the other projects', () => {
+    useAppStore.getState().createProject('other');
+    const before = useAppStore.getState().projects.length;
+
+    useAppStore.getState().switchProject(useAppStore.getState().projects[0]!.id);
+    useAppStore.getState().resetProject();
+
+    // Resetting one project used to clear the whole stored workspace; it must not.
+    expect(useAppStore.getState().projects).toHaveLength(before);
+  });
+
   it('lets the old file come back afterwards', () => {
-    useAppStore.getState().resetWorkspace();
+    useAppStore.getState().resetProject();
     const entry = useAppStore.getState().trash[0];
     useAppStore.getState().restoreTrashed(entry!.id);
 
@@ -173,7 +186,7 @@ describe('resetting the workspace is undoable', () => {
   });
 
   it('only really deletes when the trash is emptied on purpose', () => {
-    useAppStore.getState().resetWorkspace();
+    useAppStore.getState().resetProject();
     expect(useAppStore.getState().trash.length).toBeGreaterThan(0);
 
     useAppStore.getState().emptyTrash();
@@ -219,7 +232,11 @@ describe('a browser that refuses to save says so', () => {
         throw new Error('QuotaExceededError');
       });
 
-    const saved = writeFilesNow({ version: 2, files: [file('1', 'a.c', 'x')], activeId: '1' });
+    const saved = writeFilesNow({
+      version: 3,
+      projects: [{ id: 'p1', name: 'main', files: [file('1', 'a.c', 'x')], activeId: '1' }],
+      activeProjectId: 'p1',
+    });
 
     expect(saved).toBe(false);
     expect(useAppStore.getState().storageWarning).toContain('không lưu được');

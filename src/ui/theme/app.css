@@ -515,6 +515,69 @@ button {
 
 /* ---------- trash ---------- */
 
+/* ---------- projects ---------- */
+
+.explorer__project {
+  display: flex;
+  align-items: center;
+  padding: 2px 4px 4px;
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.explorer__project-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--vs-radius);
+  background: transparent;
+  color: var(--vs-text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.explorer__project-current:hover {
+  border-color: var(--vs-border);
+  background: var(--vs-hover);
+}
+
+.explorer__caret {
+  color: var(--vs-text-muted);
+}
+
+.explorer__project-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-weight: 600;
+}
+
+.explorer__projects {
+  padding: 4px 0 2px;
+  border-bottom: 1px solid var(--vs-border);
+}
+
+.explorer__row--actions {
+  gap: 6px;
+  padding: 4px 6px 0;
+}
+
+.explorer__project-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 2px;
+}
+
 .explorer__trash {
   margin-top: 6px;
   border-top: 1px solid var(--vs-border);
