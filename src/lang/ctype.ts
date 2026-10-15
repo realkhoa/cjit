@@ -285,6 +285,8 @@ export type ContainerKind =
 
 const CONTAINER_KINDS: readonly (readonly [string, ContainerKind])[] = [
   ['priority_queue', 'priority-queue'],
+  ['unordered_map', 'map'],
+  ['unordered_set', 'set'],
   ['vector', 'vector'],
   ['set', 'set'],
   ['map', 'map'],
@@ -603,23 +605,36 @@ export class TypeResolver {
     if (enumType) return enumType;
 
     // C++ containers the engine resolves itself, so no diagnostic is needed.
-    const containerMatch = /^(?:std::)?(vector|set|map|queue|stack|deque|priority_queue)\s*<(.+)>$/.exec(
-      name,
-    );    if (containerMatch) {
+    const containerMatch =
+      /^(?:std::)?(vector|set|map|queue|stack|deque|priority_queue|unordered_set|unordered_map)\s*<(.+)>$/.exec(
+        name,
+      );
+    if (containerMatch) {
       const containerName = containerMatch[1] ?? 'vector';
       const argumentText = containerMatch[2] ?? 'int';
       const args = splitTemplateArguments(argumentText);
 
-      if (containerName === 'map') {
+      if (containerName === 'map' || containerName === 'unordered_map') {
         const key = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
         const value = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
-        return mapType(key, value);
+        const type = mapType(key, value);
+        /*
+         * The unordered containers share the ordered layout deliberately: the
+         * standard promises no iteration order, so showing a deterministic one is
+         * conformant. Their bucket and hash APIs are not implemented, and a call to
+         * one says so rather than returning something invented.
+         */
+        return containerName === 'unordered_map'
+          ? { ...type, name: `std::unordered_map<${key.name}, ${value.name}>` }
+          : type;
       }
 
       const resolved = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
       switch (containerName) {
         case 'set':
           return setType(resolved);
+        case 'unordered_set':
+          return { ...setType(resolved), name: `std::unordered_set<${resolved.name}>` };
         case 'queue':
           return queueType(resolved);
         case 'stack':

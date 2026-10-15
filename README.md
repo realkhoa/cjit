@@ -189,7 +189,7 @@ Sửa kèm hai bug thật mà việc này phơi ra:
 
 | Nhóm | Có gì |
 |---|---|
-| Container | `std::vector`, `std::set`, `std::map`, `std::pair`, `std::queue`, `std::stack`, `std::deque`, `std::priority_queue` |
+| Container | `std::vector`, `std::set`, `std::map`, `std::unordered_set`, `std::unordered_map`, `std::pair`, `std::queue`, `std::stack`, `std::deque`, `std::priority_queue` |
 | Method | `size/empty/clear/begin/end`; set+map: `insert/emplace/erase/count/contains/find/at`; map: `m[k]` **find-or-insert**; queue/stack/deque: `push/pop/front/back/top/push_front/pop_front/at`; priority_queue: `push/pop/top` (max-heap thật) |
 | Algorithm | `sort`, `reverse`, `swap`, `fill`, `iota`, `accumulate`, `binary_search`, `lower_bound`, `upper_bound`, `min_element`, `max_element`, `distance`, `min`, `max`, `abs/fabs` |
 | String | `to_string`, `stoi`, `stod`, `substr`, `find`, `size`, `empty`, `append`, `c_str`, `compare` |
@@ -200,6 +200,10 @@ Hiển thị theo đúng một quy tắc: **tối đa 20 phần tử**, phần c
 
 `std::accumulate` **từ chối** phần tử không phải số (ví dụ cộng các pair của map) thay vì trả về một con số vô nghĩa. `accumulate` với custom
 operation thì báo chưa hỗ trợ.
+
+`unordered_map` / `unordered_set` **resolve thành container thật** (trước đây bị âm thầm coi là `int` — không diagnostic nào — rồi `counts[1]` báo
+"subscript on a non-pointer value", một lỗi giấu nguyên nhân của chính nó). Chúng dùng chung layout có thứ tự: chuẩn **không hứa** thứ tự duyệt nào,
+nên hiển thị một thứ tự xác định là hợp lệ. API bucket/hash (`bucket_count`, `load_factor`…) **chưa có** và báo thẳng là không có member.
 
 ### Project: nhiều file, một entry point
 
