@@ -467,6 +467,15 @@ button {
   display: inline-flex;
 }
 
+/* A touch screen has no hover, so revealing rename/delete on hover would make them
+   unreachable on a phone or tablet. `hover: none` describes the input capability,
+   which is the actual condition - not the screen width. */
+@media (hover: none) {
+  .explorer__actions {
+    display: inline-flex;
+  }
+}
+
 .explorer__confirm {
   display: inline-flex;
   gap: 2px;
@@ -564,6 +573,60 @@ button {
 }
 
 @media (max-width: 880px) {
+  /* On a phone the title bar cannot hold host + path + a pill: hide the
+     decoration and let the path shorten with an ellipsis. */
+  .titlebar .pill {
+    display: none;
+  }
+
+  .titlebar__path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Notches and home indicators: without these insets the tab bar and the status
+     bar sit under the system UI. They only report real values because the viewport
+     meta uses viewport-fit=cover. */
+  .statusbar {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  .mobile-tabs,
+  .toolbar {
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* Scrolling inside a pane must not be read as "pull to refresh" by the browser,
+     which would reload the page and lose unsaved work. */
+  .pane__body,
+  .console__body,
+  .modal__body {
+    overscroll-behavior: contain;
+  }
+
+  /* Touch feedback is the app's own; the browser's grey flash just looks broken. */
+  .btn,
+  .icon-btn,
+  .mobile-tab,
+  .tab,
+  .segmented__item {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Double-tapping a file name would otherwise zoom the page instead of (or as
+     well as) starting a rename. */
+  .explorer__name,
+  .btn,
+  .mobile-tab,
+  .tab {
+    touch-action: manipulation;
+  }
+
   /* Every control stays reachable, but the row scrolls instead of wrapping and
      eating the little vertical space there is. */
   .toolbar {

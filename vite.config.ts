@@ -29,6 +29,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['tests/**/*.test.ts'],
+    // Component tests opt into jsdom with a `@vitest-environment` docblock, so the
+    // engine and language suites keep running in plain Node.
+    include: ['tests/**/*.test.{ts,tsx}'],
   },
 });
