@@ -269,3 +269,76 @@ describe('clang engine: run', () => {
     ).rejects.toThrow('toolchain exploded');
   });
 });
+
+describe('clang engine: saving what the build produced', () => {
+  /** `saveArtifact` is optional on the Engine contract; the compiler must have it. */
+  async function saveWith(
+    worker: FakeWorker,
+    file: string,
+    which: 'wasm' | 'object',
+    save: (name: string, bytes: Uint8Array) => void,
+  ) {
+    const engine = engineWith(worker);
+    const saveArtifact = engine.saveArtifact;
+    expect(saveArtifact, 'the clang engine should support artifact saving').toBeDefined();
+    if (!saveArtifact) throw new Error('unreachable');
+    return saveArtifact({ code: PROGRAM, file }, which, save);
+  }
+
+  it('asks for the artifact and hands the bytes to the caller', async () => {
+    const worker = new FakeWorker();
+    const bytes = new Uint8Array([1, 2, 3, 4]).buffer;
+    worker.script = [{ kind: 'artifact', requestId: 1, name: 'main.wasm', bytes }];
+
+    const saved: Array<{ name: string; bytes: Uint8Array }> = [];
+    const result = await saveWith(worker, 'main.cpp', 'wasm', (name, value) =>
+      saved.push({ name, bytes: value }),
+    );
+
+    expect(worker.posted[0]).toMatchObject({
+      kind: 'artifact',
+      fileName: 'main.cpp',
+      which: 'wasm',
+    });
+    expect(result).toEqual({ ok: true, name: 'main.wasm', byteLength: 4 });
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.name).toBe('main.wasm');
+    expect([...(saved[0]?.bytes ?? [])]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('asks for the object file of the file being edited', async () => {
+    const worker = new FakeWorker();
+    worker.script = [
+      { kind: 'artifact', requestId: 1, name: 'util.o', bytes: new ArrayBuffer(2) },
+    ];
+
+    const result = await saveWith(worker, 'src/util.cpp', 'object', () => undefined);
+
+    expect(worker.posted[0]).toMatchObject({
+      kind: 'artifact',
+      fileName: 'src/util.cpp',
+      which: 'object',
+    });
+    expect(result.name).toBe('util.o');
+  });
+
+  it('reports the worker reason instead of saving nothing quietly', async () => {
+    const worker = new FakeWorker();
+    worker.script = [
+      {
+        kind: 'failure',
+        requestId: 1,
+        message: 'chưa có gì được build — bấm Run trước rồi tải',
+      },
+    ];
+
+    let saved = 0;
+    const result = await saveWith(worker, 'main.cpp', 'wasm', () => {
+      saved += 1;
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('bấm Run trước');
+    expect(saved).toBe(0);
+  });
+});

@@ -52,6 +52,7 @@ import {
 } from '@/lang/runtime/value';
 import type { Value } from '@/lang/runtime/value';
 import type { SourcePos } from '@/lang/token';
+import type { SafetyEvent, SafetyKind } from '@/engine/types';
 
 /**
  * Tree-walking C interpreter.
@@ -130,6 +131,12 @@ export interface ExecutionResult {
   readonly historyLength: number;
   /** True when a cap (variables, children, snapshots) dropped something. */
   readonly truncated: boolean;
+  /**
+   * Runtime safety events: uninitialised reads, division by zero, null
+   * dereferences, memory faults, and allocations never freed. Collected so they
+   * can be listed together, including the ones that did not stop the program.
+   */
+  readonly safety: readonly SafetyEvent[];
 }
 
 export interface ExecuteOptions {
@@ -161,6 +168,31 @@ const CHECK_INTERVAL = 2_048;
 const MAX_CHILDREN = 24;
 /** Ceiling on recorded per-line states; a huge program must not grow without bound. */
 const MAX_LINE_STATES = 2_000;
+/** Ceiling on collected runtime safety events. */
+const MAX_SAFETY_EVENTS = 50;
+
+/** How a safety event should be presented, by kind. */
+const SAFETY_SEVERITY: Readonly<Record<SafetyKind, SafetyEvent['severity']>> = {
+  'uninitialized-read': 'warning',
+  'division-by-zero': 'error',
+  'null-dereference': 'error',
+  'out-of-bounds': 'error',
+  leak: 'info',
+  'runtime-error': 'error',
+};
+
+/**
+ * Classifies a runtime fault by what it says.
+ *
+ * The interpreter is the only place that knows which fault it just raised, so the
+ * mapping lives here next to the messages rather than in the UI.
+ */
+export function safetyKindForFault(message: string): SafetyKind {
+  if (message.includes('division by zero')) return 'division-by-zero';
+  if (message.includes('null pointer')) return 'null-dereference';
+  if (message.includes('invalid memory') || message.includes('out of bounds')) return 'out-of-bounds';
+  return 'runtime-error';
+}
 
 interface Binding {
   readonly name: string;
@@ -370,6 +402,10 @@ class Interpreter {
   private lastStackSnapshot: StackFrameInfo[] = [];
   private readonly history: HistoryEntry[] = [];
   private readonly lineStates = new Map<number, WatchVariable[]>();
+  /** Runtime safety events, collected for the "Runtime issues" view. */
+  private readonly safetyEvents: SafetyEvent[] = [];
+  /** Line of the statement being executed, for events that have no position. */
+  private currentLine = 0;
   /** One line-set per active loop iteration (a stack: loops nest). */
   private readonly iterationLineStack: Array<Set<number>> = [];
   private readonly iterationCounters = new Map<number, number>();
@@ -432,9 +468,13 @@ class Interpreter {
         this.diagnostics.push(
           makeDiagnostic('error', error.message, error.position.file, error.position, error.position),
         );
+        this.recordSafety(safetyKindForFault(error.message), error.message, error.position);
         return this.finish('runtime-error', null, error.message);
       }
       if (error instanceof MemoryError) {
+        // A memory fault has an address but no line of its own: report where the
+        // run was rather than inventing a position.
+        this.recordSafety(safetyKindForFault(error.message), error.message);
         return this.finish('runtime-error', null, error.message);
       }
       const message = error instanceof Error ? error.message : String(error);
@@ -447,6 +487,16 @@ class Interpreter {
     const lineStates = [...this.lineStates.entries()]
       .map(([line, stateVars]) => ({ line, vars: stateVars }))
       .sort((left, right) => left.line - right.line);
+
+    // Reported as information, not as a bug: a program that ends immediately has
+    // no reason to free anything, but a growing allocation count is worth seeing.
+    const unfreed = this.memory.unfreedBytes;
+    if (unfreed > 0) {
+      this.recordSafety(
+        'leak',
+        `${unfreed} byte cấp phát chưa được free khi chương trình kết thúc`,
+      );
+    }
 
     return {
       stdout: this.output,
@@ -463,6 +513,7 @@ class Interpreter {
       frames: status === 'ok' ? [] : this.lastStackSnapshot,
       historyLength: this.history.length,
       truncated: this.truncated,
+      safety: [...this.safetyEvents],
     };
   }
 
@@ -746,6 +797,9 @@ class Interpreter {
 
   private executeStatement(statement: Statement): void {
     this.tick();
+    // Where execution is, for anything that has to report a position without one
+    // of its own (a fault from deep inside the memory layer, a safety event).
+    this.currentLine = statement.start.line;
     // Remember which lines each active loop iteration touched, so the pane can
     // find the loop a caret line belongs to.
     this.trackIterationLine(statement.start.line);
@@ -874,6 +928,9 @@ class Interpreter {
     for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       if (!item) continue;
+      // Declarations have their own path, so execution position is tracked here as
+      // well as in `executeStatement`.
+      this.currentLine = item.start.line;
       try {
         if (isDeclarationKind(item.kind)) {
           this.executeDeclaration(item as Declaration);
@@ -2514,7 +2571,15 @@ class Interpreter {
     }
   }
 
-  private load(type: CType, address: number, binding?: Binding): Value {
+  /**
+   * Reads a value out of memory.
+   *
+   * `reportUninitialized` is false for the reads the *display* does: the watch pane
+   * reads every variable to show its value, and counting that as the program
+   * reading an uninitialised variable produced warnings for code that assigns a
+   * variable before ever using it.
+   */
+  private load(type: CType, address: number, binding?: Binding, reportUninitialized = true): Value {
     switch (type.kind) {
       case 'bool':
         return intValue(type, this.memory.readUint8(address));
@@ -2522,7 +2587,9 @@ class Interpreter {
         return intValue(type, type.signed ? this.memory.readInt8(address) : this.memory.readUint8(address));
       case 'int':
       case 'enum': {
-        if (this.uninitialized.has(address)) this.warnUninitialized(address, binding);
+        if (reportUninitialized && this.uninitialized.has(address)) {
+          this.warnUninitialized(address, binding);
+        }
         if (type.size === 2) return intValue(type, type.signed ? this.memory.readInt16(address) : this.memory.readUint16(address));
         if (type.size === 1) return intValue(type, type.signed ? this.memory.readInt8(address) : this.memory.readUint8(address));
         if (type.size === 8) {
@@ -2556,15 +2623,36 @@ class Interpreter {
     if (this.warnedUninitialized.has(address)) return;
     this.warnedUninitialized.add(address);
     const position = binding?.declaredAt ?? this.unit.start;
+    const message = `read of uninitialized variable${binding ? ` '${binding.name}'` : ''}`;
     this.diagnostics.push(
-      makeDiagnostic(
-        'warning',
-        `read of uninitialized variable${binding ? ` '${binding.name}'` : ''}`,
-        position.file,
-        position,
-        position,
-      ),
+      makeDiagnostic('warning', message, position.file, position, position),
     );
+    // The diagnostic points at the declaration (that is the marker worth having in
+    // the editor); the safety event points at the read, which is where the program
+    // actually was, and names the declaration line in its message.
+    this.recordSafety(
+      'uninitialized-read',
+      binding ? `${message} (declared at line ${position.line})` : message,
+    );
+  }
+
+  /**
+   * Records a runtime safety event.
+   *
+   * These are the things a C compiler accepts and a debugger would stop on:
+   * reading an uninitialised variable, dividing by zero, dereferencing null,
+   * walking off an allocation, or never freeing one.
+   */
+  private recordSafety(kind: SafetyKind, message: string, position?: SourcePos): void {
+    if (this.safetyEvents.length >= MAX_SAFETY_EVENTS) return;
+    this.safetyEvents.push({
+      kind,
+      severity: SAFETY_SEVERITY[kind],
+      message,
+      // The statement being executed is a better answer than "the top of the file"
+      // when the fault came from inside the memory layer.
+      line: position?.line ?? this.currentLine,
+    });
   }
 
   private pointerAddressOf(value: Value): number | null {
@@ -2838,7 +2926,8 @@ class Interpreter {
   }
 
   private describe(binding: Binding, depth: number): WatchVariable {
-    const value = this.load(binding.type, binding.address);
+    // Display read: showing an uninitialised variable is not the program reading it.
+    const value = this.load(binding.type, binding.address, undefined, false);
     const children = depth >= 2 ? [] : this.childrenOf(binding.type, binding.address, depth);
 
     return {
@@ -2929,7 +3018,9 @@ class Interpreter {
         this.truncated = true;
         return;
       }
-      const childValue = this.load(childType, childAddress);
+      // Display read, like `describe`: expanding an aggregate for the pane must not
+      // be mistaken for the program reading an uninitialised member.
+      const childValue = this.load(childType, childAddress, undefined, false);
       const nested = depth >= 1 ? [] : this.childrenOf(childType, childAddress, depth + 1);
       children.push({
         name,

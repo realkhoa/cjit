@@ -1,16 +1,30 @@
 import { revealPosition } from '@/editor/navigation';
+import type { SafetyKind } from '@/engine/types';
 import { useAppStore } from '@/state/store';
 import type { ConsoleTab } from '@/state/store';
 
 const TABS: readonly { readonly id: ConsoleTab; readonly label: string }[] = [
   { id: 'output', label: 'Output' },
   { id: 'problems', label: 'Problems' },
+  { id: 'runtime', label: 'Runtime' },
   { id: 'stdin', label: 'Stdin' },
 ];
+
+/** Short label for a safety event, so the list reads as a table. */
+const SAFETY_LABELS: Readonly<Record<SafetyKind, string>> = {
+  'uninitialized-read': 'uninitialized',
+  'division-by-zero': 'divide by zero',
+  'null-dereference': 'null deref',
+  'out-of-bounds': 'out of bounds',
+  leak: 'not freed',
+  'runtime-error': 'runtime error',
+};
 
 export function ConsolePanel() {
   const output = useAppStore((state) => state.output);
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
+  const safety = useAppStore((state) => state.watch.safety);
+  const engineLabel = useAppStore((state) => state.watch.engineLabel);
   const consoleTab = useAppStore((state) => state.consoleTab);
   const setConsoleTab = useAppStore((state) => state.setConsoleTab);
   const clearOutput = useAppStore((state) => state.clearOutput);
@@ -30,6 +44,9 @@ export function ConsolePanel() {
             {tab.label}
             {tab.id === 'problems' && diagnostics.length > 0 ? (
               <span className="console__tab-badge">{diagnostics.length}</span>
+            ) : null}
+            {tab.id === 'runtime' && safety.length > 0 ? (
+              <span className="console__tab-badge">{safety.length}</span>
             ) : null}
           </button>
         ))}
@@ -74,6 +91,33 @@ export function ConsolePanel() {
                     {diagnostic.source}:{diagnostic.startLine}:{diagnostic.startColumn}
                   </span>
                   <span className="problem__msg">{diagnostic.message}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : consoleTab === 'runtime' ? (
+        <div className="console__body">
+          {safety.length === 0 ? (
+            <span className="console__hint">
+              {engineLabel.toLowerCase().includes('clang')
+                ? 'Engine clang chỉ build và chạy: nó không kiểm tra an toàn lúc chạy. Chuyển sang fast engine để thấy các vấn đề runtime.'
+                : 'Không thấy vấn đề runtime nào: biến chưa khởi tạo, chia 0, deref null, truy cập ngoài vùng nhớ, và bộ nhớ chưa free sẽ hiện ở đây.'}
+            </span>
+          ) : (
+            <div className="problems">
+              {safety.map((event, index) => (
+                <button
+                  key={`${event.kind}:${event.line}:${index}`}
+                  type="button"
+                  className={`problem problem--${event.severity}`}
+                  onClick={() => (event.line > 0 ? revealPosition(event.line, 1) : undefined)}
+                  title={event.line > 0 ? 'Nhảy tới dòng này' : 'Không gắn với một dòng cụ thể'}
+                >
+                  <span className="problem__seat">
+                    {SAFETY_LABELS[event.kind]} · {event.line > 0 ? `Ln ${event.line}` : 'no line'}
+                  </span>
+                  <span className="problem__msg">{event.message}</span>
                 </button>
               ))}
             </div>

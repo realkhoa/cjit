@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ENGINE_ORDER, getEngine } from '@/engine/registry';
 import type { EngineId } from '@/engine/types';
 import { EXAMPLES } from '@/examples/sample';
+import { isTranslationUnit } from '@/lang/clang/runtime';
 import { useAppStore } from '@/state/store';
 import { SettingsDialog } from '@/ui/SettingsDialog';
 
@@ -10,6 +11,8 @@ export function Toolbar() {
   const engineId = useAppStore((state) => state.engineId);
   const run = useAppStore((state) => state.run);
   const stop = useAppStore((state) => state.stop);
+  const artifactsReady = useAppStore((state) => state.artifactsReady);
+  const downloadArtifact = useAppStore((state) => state.downloadArtifact);
   const clearOutput = useAppStore((state) => state.clearOutput);
   const loadExample = useAppStore((state) => state.loadExample);
   const setEngineId = useAppStore((state) => state.setEngineId);
@@ -51,6 +54,28 @@ export function Toolbar() {
           title="Dừng chương trình đang chạy, kể cả vòng lặp vô hạn (Shift+F5)"
         >
           ■ Stop
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={!artifactsReady}
+          onClick={() => void downloadArtifact('wasm')}
+          title="Tải file .wasm mà clang + lld vừa tạo (chỉ bật sau khi Run bằng engine biên dịch thật thành công)"
+        >
+          ⬇ .wasm
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={!artifactsReady || !isTranslationUnit(path)}
+          onClick={() => void downloadArtifact('object')}
+          title={
+            isTranslationUnit(path)
+              ? 'Tải object file của file đang mở'
+              : 'File đang mở là header — chỉ file .c/.cpp mới có object file'
+          }
+        >
+          ⬇ .o
         </button>
       </div>
 

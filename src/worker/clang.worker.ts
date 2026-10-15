@@ -1,11 +1,17 @@
 import { parseClangDiagnostics, stripAnsi } from '@/lang/clang/diagnostics';
-import { createClangRuntime } from '@/lang/clang/runtime';
+import { artifactName, createClangRuntime } from '@/lang/clang/runtime';
+import type { ArtifactKind } from '@/lang/clang/runtime';
 import {
   TOOLCHAIN_CACHE_VERSION,
   createCachedFiles,
   openToolchainStorage,
 } from '@/lang/clang/toolchainCache';
-import type { ClangRequest, ClangResponse } from '@/worker/clangProtocol';
+import type {
+  ClangArtifactRequest,
+  ClangRequest,
+  ClangResponse,
+  ClangRunRequest,
+} from '@/worker/clangProtocol';
 
 /**
  * clang + lld + libc++ worker.
@@ -33,6 +39,7 @@ interface RuntimeLike {
     wasmBytes: number;
     failure?: string;
   }>;
+  readArtifact(sourcePath: string, kind: ArtifactKind): Uint8Array | null;
 }
 
 function post(response: ClangResponse): void {
@@ -85,7 +92,7 @@ let cachedBase = '';
  */
 let activeRequestId = 0;
 
-async function handleRun(request: ClangRequest): Promise<void> {
+async function handleRun(request: ClangRunRequest): Promise<void> {
   const { requestId } = request;
   activeRequestId = requestId;
 
@@ -167,7 +174,49 @@ async function handleRun(request: ClangRequest): Promise<void> {
   }
 }
 
+/** Reads a build artifact back out of the compiler's filesystem. */
+function handleArtifact(request: ClangArtifactRequest): void {
+  const { requestId } = request;
+
+  if (!cachedRuntime) {
+    post({
+      kind: 'failure',
+      requestId,
+      message: 'chưa có gì được build — bấm Run trước rồi tải',
+    });
+    return;
+  }
+
+  try {
+    const bytes = cachedRuntime.readArtifact(request.fileName, request.which);
+    if (!bytes) {
+      post({
+        kind: 'failure',
+        requestId,
+        message:
+          request.which === 'object'
+            ? `không có object file cho ${request.fileName} (chỉ file .c/.cpp được compile)`
+            : `không có .wasm cho ${request.fileName}`,
+      });
+      return;
+    }
+
+    const buffer = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+    post({ kind: 'artifact', requestId, name: artifactName(request.fileName, request.which), bytes: buffer });
+  } catch (error) {
+    post({
+      kind: 'failure',
+      requestId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 self.addEventListener('message', (event: MessageEvent<ClangRequest>) => {
   const request = event.data;
   if (request.kind === 'run') void handleRun(request);
+  else if (request.kind === 'artifact') handleArtifact(request);
 });

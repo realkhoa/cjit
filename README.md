@@ -154,6 +154,33 @@ Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu v
 - **`#include <`** gợi ý toàn bộ header mà engine biết.
 - **Hover** thêm giá trị mà biến có **tại dòng đang trỏ**.
 
+### Console: 4 tab, gồm Runtime issues
+
+`Output` · `Problems` · **`Runtime`** · `Stdin`. Tab **Runtime** gom những gì chương trình làm mà compiler chấp
+nhận nhưng debugger sẽ dừng lại:
+
+| Loại | Ví dụ |
+|---|---|
+| `uninitialized` | đọc biến chưa khởi tạo — **không** làm chương trình dừng, nên trước đây chỉ là một warning trôi mất |
+| `divide by zero` | chia 0, kèm dòng xảy ra |
+| `null deref` | deref con trỏ null |
+| `out of bounds` | truy cập ngoài vùng nhớ (lỗi từ tầng memory, có địa chỉ, không có dòng) |
+| `not freed` | byte cấp phát chưa `free` khi chương trình kết thúc (mức `info`, không phải lỗi) |
+
+Bấm một dòng để nhảy tới đúng chỗ trong editor. Sửa luôn một **false positive cũ**: pane Watch đọc giá trị của mọi
+biến để hiển thị, và việc đọc đó bị tính là *chương trình* đọc biến chưa khởi tạo — nên `int x; x = 5;` bị báo oan.
+Giờ đường đọc để hiển thị không tính là đọc của chương trình, nên báo cáo chỉ nói về những lần đọc thật.
+
+Khi Run bằng **clang**, tab ghi rõ engine đó chỉ build và chạy, **không kiểm tra an toàn lúc chạy** — để một báo
+cáo trống không bị hiểu là "chương trình đã được kiểm tra và sạch".
+
+### Tải thành quả build về máy
+
+Sau khi Run bằng clang + lld thành công, toolbar có **`⬇ .wasm`** và **`⬇ .o`**: file `.wasm` đã link và object
+file của file đang mở, tên chuẩn hoá (`main.cpp` → `main.wasm`, `main.o`). Artifact được lấy **theo yêu cầu**
+(một round trip riêng trong worker) chứ không gửi kèm mỗi lần Run — không ai phải trả 600 KB cho một file họ có
+thể không cần. File header thì nút `.o` bị tắt kèm lý do, và engine fast thì báo thẳng là không tạo ra file.
+
 ### M3: đọc dữ liệu chương trình
 
 - **Timeline như một debugger (replay)**: trong chế độ Timeline có transport `⏮ ◀ ▶/⏸ ▶ ⏭` — step tiến/lùi

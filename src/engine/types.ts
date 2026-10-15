@@ -16,6 +16,9 @@
 
 export type EngineId = 'fast' | 'clang-wasm';
 
+/** What a compiler run can hand back for saving. */
+export type ArtifactKind = 'wasm' | 'object';
+
 export type Severity = 'error' | 'warning' | 'info';
 
 export interface Diagnostic {
@@ -62,6 +65,28 @@ export interface VarNode {
 export interface StackFrame {
   readonly function: string;
   /** The line currently executing inside that frame. */
+  readonly line: number;
+}
+
+/**
+ * A runtime safety event: something a C compiler accepts and a debugger would stop
+ * on. Collected while the program runs so they can be listed together instead of
+ * scrolling away in the console - and so a non-fatal one (reading an
+ * uninitialised variable) is still visible after the program ends.
+ */
+export type SafetyKind =
+  | 'uninitialized-read'
+  | 'division-by-zero'
+  | 'null-dereference'
+  | 'out-of-bounds'
+  | 'leak'
+  | 'runtime-error';
+
+export interface SafetyEvent {
+  readonly kind: SafetyKind;
+  readonly severity: Severity;
+  readonly message: string;
+  /** 0 when the event has no single line (an address-level memory error). */
   readonly line: number;
 }
 
@@ -115,6 +140,8 @@ export interface WatchSnapshot {
   readonly lineStates: readonly LineState[];
   /** Ordered assignment states for the timeline scrubber. */
   readonly history: readonly WatchHistoryEntry[];
+  /** Runtime safety events collected during the pass that produced this snapshot. */
+  readonly safety: readonly SafetyEvent[];
 }
 
 export interface RunOutcome {
@@ -164,6 +191,25 @@ export interface Engine {
     sink: RunSink,
     signal: AbortSignal,
   ): Promise<RunOutcome>;
+  /**
+   * Hands back something the last build produced, so the user can save it.
+   *
+   * Optional because only a real compiler produces artifacts: the fast engine has
+   * nothing to give, and saying so is better than a button that does nothing.
+   */
+  saveArtifact?(
+    source: SourceUnit,
+    kind: ArtifactKind,
+    save: (name: string, bytes: Uint8Array) => void,
+  ): Promise<ArtifactSaveResult>;
+}
+
+export interface ArtifactSaveResult {
+  readonly ok: boolean;
+  readonly error?: string;
+  /** What the file was called, when it worked. */
+  readonly name?: string;
+  readonly byteLength?: number;
 }
 
 export function emptyWatch(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
@@ -181,6 +227,7 @@ export function emptyWatch(patch: Partial<WatchSnapshot> = {}): WatchSnapshot {
     diagnostics: [],
     lineStates: [],
     history: [],
+    safety: [],
     ...patch,
   };
 }

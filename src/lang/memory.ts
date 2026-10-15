@@ -42,6 +42,15 @@ export class Memory {
       .reduce((total, block) => total + block.size, 0);
   }
 
+  /**
+   * Bytes still allocated. Reported at the end of a run as a possible leak: a
+   * short-lived program never has to free anything, so it is information rather
+   * than an error.
+   */
+  get unfreedBytes(): number {
+    return this.usedBytes;
+  }
+
   isValid(address: number, size = 1): boolean {
     return (
       Number.isInteger(address) &&

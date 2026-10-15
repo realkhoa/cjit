@@ -57,6 +57,29 @@ export function isTranslationUnit(path: string): boolean {
   return TRANSLATION_UNIT_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
 
+/** What a run can hand back to the user besides its output. */
+export type ArtifactKind = 'wasm' | 'object';
+
+/**
+ * The name a downloaded artifact gets: the source stem plus the artifact's own
+ * extension (`main.cpp` -> `main.wasm`), because `.cpp.o` is not what anyone
+ * expects in their downloads folder. For a header the name is only ever produced
+ * if the object exists - and it does not, since headers are not compiled on their
+ * own, which the worker reports as a failure before naming anything.
+ */
+export function artifactName(sourcePath: string, kind: ArtifactKind): string {
+  const slash = sourcePath.lastIndexOf('/');
+  const base = slash >= 0 ? sourcePath.slice(slash + 1) : sourcePath;
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return kind === 'wasm' ? `${stem}.wasm` : `${stem}.o`;
+}
+
+/** The internal memfs path of an artifact, which is what the compiler wrote. */
+export function artifactPath(sourcePath: string, kind: ArtifactKind): string {
+  return kind === 'wasm' ? `${sourcePath}.wasm` : `${sourcePath}.o`;
+}
+
 function languageOf(path: string): 'c' | 'c++' {
   return path.toLowerCase().endsWith('.c') ? 'c' : 'c++';
 }
@@ -100,6 +123,12 @@ export interface BuildOutcome {
 export interface ClangRuntime {
   readonly ready: Promise<void>;
   build(request: BuildRequest): Promise<BuildOutcome>;
+  /**
+   * Reads back something the last build produced (`the linked .wasm`, or the
+   * object file of one translation unit). Returns null when it does not exist -
+   * for example the object of a header, or before anything has been built.
+   */
+  readArtifact(sourcePath: string, kind: ArtifactKind): Uint8Array | null;
 }
 
 interface MemFs {
@@ -303,5 +332,13 @@ export function createClangRuntime(options: ClangRuntimeOptions): ClangRuntime {
     }
   }
 
-  return { ready, build };
+  function readArtifact(sourcePath: string, kind: ArtifactKind): Uint8Array | null {
+    const contents = api?.memfs.getFileContents(artifactPath(sourcePath, kind));
+    if (!contents || contents.byteLength === 0) return null;
+    // memfs hands back a view over the compiler's memory, which is reused by the
+    // next build: copy before returning it.
+    return new Uint8Array(contents);
+  }
+
+  return { ready, build, readArtifact };
 }

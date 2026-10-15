@@ -1,7 +1,14 @@
 import { buildCompileErrorSnapshot, createFastEngine } from '@/engine/fastEngine';
 import { analyzeSource } from '@/lang/analyze';
 import { publishAnalysis } from '@/lang/analysisCache';
-import type { Engine, RunOutcome, RunSink, SourceUnit, WatchSnapshot } from '@/engine/types';
+import type {
+  ArtifactSaveResult,
+  Engine,
+  RunOutcome,
+  RunSink,
+  SourceUnit,
+  WatchSnapshot,
+} from '@/engine/types';
 import type { ClangRequest, ClangResponse } from '@/worker/clangProtocol';
 
 /**
@@ -50,6 +57,42 @@ export function createClangEngine(options: ClangEngineOptions = {}): Engine {
     worker?.terminate();
     worker = null;
   };
+
+  /**
+   * Sends one request and waits for its answer.
+   *
+   * Used by artifact downloads, which are a single round trip and must not be
+   * confused with the streaming protocol a run uses.
+   */
+  const requestOnce = <T>(
+    build: (id: number) => ClangRequest,
+    read: (response: ClangResponse) => T | undefined,
+  ): Promise<T | null> =>
+    new Promise<T | null>((resolve) => {
+      let current: Worker;
+      try {
+        current = ensureWorker();
+      } catch {
+        resolve(null);
+        return;
+      }
+
+      requestId += 1;
+      const id = requestId;
+
+      const onMessage = (event: MessageEvent): void => {
+        const response = event.data as ClangResponse;
+        if (response.requestId !== id) return;
+
+        const value = read(response);
+        if (value === undefined) return;
+        current.removeEventListener('message', onMessage);
+        resolve(value);
+      };
+
+      current.addEventListener('message', onMessage);
+      current.postMessage(build(id));
+    });
 
   return {
     id: 'clang-wasm',
@@ -161,6 +204,34 @@ export function createClangEngine(options: ClangEngineOptions = {}): Engine {
         };
         current.postMessage(request);
       });
+    },
+
+    async saveArtifact(source, kind, save): Promise<ArtifactSaveResult> {
+      const answer = await requestOnce(
+        (id): ClangRequest => ({
+          kind: 'artifact',
+          requestId: id,
+          fileName: source.file,
+          which: kind,
+        }),
+        (response) => {
+          if (response.kind === 'artifact') {
+            return { ok: true as const, name: response.name, bytes: new Uint8Array(response.bytes) };
+          }
+          if (response.kind === 'failure') return { ok: false as const, error: response.message };
+          return undefined;
+        },
+      );
+
+      if (!answer) {
+        return { ok: false, error: 'the compiler worker did not answer' };
+      }
+      if (!answer.ok) {
+        return { ok: false, error: answer.error };
+      }
+
+      save(answer.name, answer.bytes);
+      return { ok: true, name: answer.name, byteLength: answer.bytes.byteLength };
     },
   };
 }

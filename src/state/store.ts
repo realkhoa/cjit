@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { DEFAULT_EXAMPLE } from '@/examples/sample';
 import { getEngine, isEngineWired } from '@/engine/registry';
 import type { EngineId, SourceFile, WatchSnapshot } from '@/engine/types';
+import type { ArtifactKind } from '@/engine/types';
 import { emptyWatch } from '@/engine/types';
 import { DebouncedAnalyzer } from '@/state/analyzeController';
 import {
@@ -39,6 +40,7 @@ import {
   toSharePayload,
   workspaceFromShare,
 } from '@/state/share';
+import { formatBytes, saveBytes } from '@/util/download';
 import {
   DEFAULT_BOTTOM_PERCENT,
   DEFAULT_EXPLORER_WIDTH,
@@ -69,7 +71,7 @@ export const PREFERRED_RUN_ENGINE_ID: EngineId = 'clang-wasm';
 
 export type RunState = 'idle' | 'running';
 export type AnalysisState = 'idle' | 'analyzing';
-export type ConsoleTab = 'output' | 'problems' | 'stdin';
+export type ConsoleTab = 'output' | 'problems' | 'runtime' | 'stdin';
 export type OutputKind = 'stdout' | 'stderr' | 'system';
 
 export interface OutputLine {
@@ -130,6 +132,11 @@ export interface AppState {
   readonly timelineIndex: number;
   /** Playing walks the recorded moments on its own, and stops at the end. */
   readonly timelinePlaying: boolean;
+  /** True when the last Run produced files that can be saved. */
+  readonly artifactsReady: boolean;
+
+  /** Saves what the last compiler run produced (`.wasm` / `.o`). */
+  downloadArtifact(which: ArtifactKind): Promise<void>;
 
   setMobilePane(pane: PaneId): void;
   setWatchMode(mode: WatchMode): void;
@@ -248,6 +255,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   watchMode: 'cursor',
   timelineIndex: 0,
   timelinePlaying: false,
+  artifactsReady: false,
 
   setCodeFromEditor(code) {
     const { files, activeFileId } = get();
@@ -470,6 +478,37 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ timelinePlaying: playing });
   },
 
+  async downloadArtifact(which) {
+    const state = get();
+    const engine = isEngineWired(state.engineId)
+      ? getEngine(state.engineId)
+      : getEngine(WATCH_ENGINE_ID);
+
+    if (!engine.saveArtifact) {
+      get().appendOutput(
+        'system',
+        `> ${engine.id} không tạo ra file để tải — chỉ engine biên dịch thật (clang + lld) mới sinh .wasm/.o`,
+      );
+      return;
+    }
+
+    const result = await engine.saveArtifact(
+      { code: state.code, file: state.path, files: workspaceFiles(state) },
+      which,
+      saveBytes,
+    );
+
+    if (!result.ok) {
+      get().appendOutput('system', `> Không tải được ${which}: ${result.error ?? 'unknown error'}`);
+      return;
+    }
+
+    get().appendOutput(
+      'system',
+      `> Đã tải ${result.name} (${formatBytes(result.byteLength ?? 0)})`,
+    );
+  },
+
   toggleTimelinePlayback() {
     const { timelinePlaying, watch, timelineIndex } = get();
     if (timelinePlaying) {
@@ -599,6 +638,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
           diagnostics: outcome.diagnostics.length > 0 ? outcome.diagnostics : state.watch.diagnostics,
         },
         consoleTab: outcome.status === 'compile-error' ? 'problems' : state.consoleTab,
+        // Only a compiler produces files to save, and only if the link succeeded.
+        artifactsReady:
+          engine.id !== WATCH_ENGINE_ID &&
+          (outcome.status === 'ok' || outcome.status === 'runtime-error'),
       }));
 
       if (outcome.detail) get().appendOutput('system', outcome.detail);

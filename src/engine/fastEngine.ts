@@ -113,6 +113,8 @@ export function buildCompileErrorSnapshot(analysis: AnalysisResult): WatchSnapsh
     diagnostics: analysis.diagnostics,
     lineStates: [],
     history: [],
+    // Nothing ran, so nothing could go wrong at runtime.
+    safety: [],
   };
 }
 
@@ -152,6 +154,7 @@ export function buildWatchSnapshot(
       ...(entry.lines === undefined ? {} : { lines: entry.lines }),
       vars: entry.vars.map(toVarNode),
     })),
+    safety: result.safety,
   };
 }
 
