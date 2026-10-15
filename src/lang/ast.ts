@@ -32,6 +32,11 @@ export interface TypeRef extends Node {
   readonly returnType?: TypeRef;
   readonly params?: readonly ParamDecl[];
   readonly variadic?: boolean;
+  /**
+   * `T&`: the storage holds the referent's address, and every read or write goes
+   * through it. Distinct from `T*`, which is a value you can copy and do arithmetic on.
+   */
+  readonly reference?: boolean;
 }
 
 export interface ParamDecl extends Node {

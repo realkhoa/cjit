@@ -219,6 +219,10 @@ interface Binding {
   readonly storage: 'local' | 'param' | 'global' | 'static';
   readonly scopeName: string;
   readonly declaredAt: SourcePos;
+  /** `T&`: the slot holds an address and every use goes through it. */
+  readonly reference?: boolean;
+  /** A reference to const: readable, not writable. */
+  readonly readonly?: boolean;
 }
 
 interface Scope {
@@ -826,6 +830,64 @@ class Interpreter {
 
     let type = this.resolver.resolve(declaration.type);
     let address: number;
+
+    /*
+     * `int& total = sum;` and `const int& limit = other;` bind the initializer itself
+     * rather than copying it: the slot holds an address and every use reads through.
+     * `total += 1` then changes `sum`, as a native compiler does.
+     */
+    if (declaration.type.reference) {
+      const referent = type.pointee ?? intType();
+      const initializer = declaration.initializer;
+      const bound = initializer ? this.lvalue(initializer) : null;
+
+      if (bound) {
+        address = this.allocateFor(type);
+        this.memory.writeUint64(address, bound.address);
+      } else if (initializer && this.isConstReference(declaration.type)) {
+        // A const reference may bind a temporary, whose storage lives as long as the
+        // reference needs it.
+        address = this.allocateFor(type);
+        const temporary = this.allocateFor(referent);
+        this.store(referent, temporary, this.valueForType(referent, this.evaluate(initializer)));
+        this.memory.writeUint64(address, temporary);
+      } else {
+        this.diagnostics.push(
+          makeDiagnostic(
+            'error',
+            `reference '${declaration.name}' must be initialised with something that exists`,
+            declaration.start.file,
+            declaration.start,
+            declaration.end,
+          ),
+        );
+        const nil = this.allocateFor(type);
+        this.memory.writeUint64(nil, 0);
+        this.bind({
+          name: declaration.name,
+          type,
+          address: nil,
+          storage,
+          scopeName,
+          declaredAt: declaration.start,
+          reference: true,
+          readonly: this.isConstReference(declaration.type),
+        });
+        return;
+      }
+
+      this.bind({
+        name: declaration.name,
+        type,
+        address,
+        storage,
+        scopeName,
+        declaredAt: declaration.start,
+        reference: true,
+        readonly: this.isConstReference(declaration.type),
+      });
+      return;
+    }
 
     // `int a[] = {1, 2, 3};` and `char s[] = "abc";` take their length from the
     // initializer, exactly as C does.
@@ -1440,7 +1502,15 @@ class Interpreter {
     if (name === 'NULL' || name === 'nullptr') return pointerValue(VOID_TYPE, 0);
 
     const binding = this.lookup(name);
-    if (binding) return this.load(binding.type, binding.address, binding);
+    if (binding) {
+      // A reference reads through to its referent: `value` in `void bump(int& value)`
+      // is the caller's int, not an address.
+      if (binding.reference) {
+        const target = this.memory.readUint64(binding.address);
+        return this.load(binding.type.pointee ?? binding.type, target, binding);
+      }
+      return this.load(binding.type, binding.address, binding);
+    }
 
     const declaration = this.definitions.get(name);
     if (declaration) {
@@ -1939,8 +2009,45 @@ class Interpreter {
     for (let index = 0; index < args.length; index += 1) {
       const argument = args[index];
       if (!argument) continue;
-      const raw = this.evaluateRaw(argument);
       const param = params[index];
+
+      /*
+       * A reference parameter is bound to the caller's object, not to a copy - so what
+       * is passed is the argument's address. Passing its *value* is what made
+       * `bump(x)` with x = 4 dereference address 4 and stop the program.
+       */
+      if (param?.type.reference) {
+        const referent = this.resolver.resolve(param.type).pointee ?? intType();
+        const bound = this.lvalue(argument);
+
+        if (bound) {
+          values.push({
+            kind: 'pointer',
+            type: { ...pointerTo(referent), name: `${referent.name} &` },
+            address: bound.address,
+          });
+          continue;
+        }
+
+        // `const T&` may bind a temporary; a plain `T&` may not, and C++ says so.
+        if (!this.isConstReference(param.type)) {
+          throw new RuntimeFault(
+            'a non-const reference cannot bind a temporary value',
+            argument.start,
+          );
+        }
+
+        const temporary = this.allocateFor(referent);
+        this.store(referent, temporary, this.valueForType(referent, this.evaluateRaw(argument)));
+        values.push({
+          kind: 'pointer',
+          type: { ...pointerTo(referent), name: `const ${referent.name} &` },
+          address: temporary,
+        });
+        continue;
+      }
+
+      const raw = this.evaluateRaw(argument);
       const paramType = param ? this.resolver.resolve(param.type) : undefined;
       if (paramType && isPointerType(paramType)) {
         const address = this.pointerAddressOf(raw);
@@ -1952,6 +2059,11 @@ class Interpreter {
       }
     }
     return values;
+  }
+
+  /** `const T&` - the pointee carries the qualifier the parser recorded. */
+  private isConstReference(type: { readonly pointee?: { readonly qualifiers: readonly string[] } }): boolean {
+    return type.pointee?.qualifiers.includes('const') ?? false;
   }
 
   /** Evaluates without decaying arrays, so `sizeof`/`&` see the real thing. */
@@ -1994,6 +2106,11 @@ class Interpreter {
           storage: 'param',
           scopeName: declaration.name,
           declaredAt: param.start,
+          // A reference parameter is the caller's object: mark the slot so every read
+          // and write in the body goes through to it.
+          ...(param.type.reference
+            ? { reference: true, readonly: this.isConstReference(param.type) }
+            : {}),
         });
       });
 
@@ -3580,6 +3697,24 @@ class Interpreter {
       case 'identifier': {
         const binding = this.lookup(expression.name);
         if (!binding) return null;
+
+        /*
+         * A reference *is* its referent, so an assignment through one writes to the
+         * object that was bound - which is the whole point of `void bump(int&)`. A
+         * `const T&` refers to something this scope may not change, and saying so is
+         * better than quietly writing through it.
+         */
+        if (binding.reference) {
+          if (binding.readonly) {
+            throw new RuntimeFault(
+              `cannot assign through '${binding.name}': it is a reference to const`,
+              expression.start,
+            );
+          }
+          const target = this.memory.readUint64(binding.address);
+          return { address: target, type: binding.type.pointee ?? binding.type };
+        }
+
         return { address: binding.address, type: binding.type };
       }
       case 'index':

@@ -214,6 +214,19 @@ class Parser {
     };
   }
 
+  /** `T&`: the same storage as a pointer, but it is the referent everywhere it is used. */
+  private wrapReference(pointee: TypeRef, start: SourcePos, end: SourcePos): TypeRef {
+    return {
+      kind: 'pointer',
+      name: `${pointee.name} &`,
+      qualifiers: [],
+      pointee,
+      reference: true,
+      start,
+      end,
+    };
+  }
+
   private isTypeSpecifierToken(token: Token | undefined): boolean {
     if (token === undefined) return false;
     if (token.kind === 'keyword') {
@@ -631,10 +644,13 @@ class Parser {
   private parseDeclarator(base: TypeRef): Declarator {
     const start = this.peek().start;
     let pointerCount = 0;
+    /** `&` is a reference, not a pointer: `bump(x)` must not pass the value as an address. */
+    let reference = false;
 
     for (;;) {
       const token = this.peek();
-      if (token.text === '*' || token.text === '&') {
+      if (token.text === '*' || token.text === '&' || token.text === '&&') {
+        if (token.text !== '*') reference = true;
         pointerCount += 1;
         this.advance();
         continue;
@@ -699,7 +715,10 @@ class Parser {
     // Pointers bind first, then suffixes: `char *argv[]` is an array of pointers.
     let type = base;
     for (let count = 0; count < pointerCount; count += 1) {
-      type = this.wrapPointer(type, start, this.previousEnd());
+      const last = count === pointerCount - 1;
+      type = last && reference
+        ? this.wrapReference(type, start, this.previousEnd())
+        : this.wrapPointer(type, start, this.previousEnd());
     }
 
     for (;;) {
