@@ -175,6 +175,10 @@ describe('engine output feeds the editor overlays', () => {
     const table = buildIterationTable(snapshot.history, 9);
     expect(table.rows.length).toBe(8);
     expect(table.rows.map((row) => row.globalIteration)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    // A vector reads inline as `[value, value, ...]`, not as a type and an address.
+    const vectorOverlay = specs.find((spec) => spec.content.includes('nums = ['));
+    expect(vectorOverlay?.content).toContain('[3, 1, 4, 1, 5, 9, 2, 6]');
   });
 });
 

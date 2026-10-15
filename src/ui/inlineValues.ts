@@ -27,7 +27,14 @@ export interface InlineValue {
 /** Overlays are capped so a 2000-line run cannot flood the editor. */
 const MAX_OVERLAYS = 300;
 const MAX_NAMES = 3;
-const MAX_VALUE_LENGTH = 28;
+/**
+ * A container shows up to 20 elements, so `[1, 2, ...]` needs room: at 28
+ * characters a vector was always cut off mid-list, which is what made its preview
+ * unreadable.
+ */
+const MAX_VALUE_LENGTH = 160;
+/** Total text per overlay, so three long vectors cannot span the whole screen. */
+const MAX_OVERLAY_TEXT = 240;
 
 /**
  * Monaco injects this text into a single line, so any newline or tab in a value
@@ -79,11 +86,25 @@ export function inlineValuesFor(watch: WatchSnapshot): InlineValue[] {
     if (chosen.length === 0) continue;
 
     const shown = chosen.slice(0, MAX_NAMES);
+    const names: string[] = [];
+    const parts: string[] = [];
+    let length = 0;
+
+    for (const item of shown) {
+      const part = `${item.name} = ${shorten(item.value)}`;
+      // Always keep the first entry; after that, stop before the overlay grows
+      // wider than the screen.
+      if (parts.length > 0 && length + part.length > MAX_OVERLAY_TEXT) break;
+      parts.push(part);
+      names.push(item.name);
+      length += part.length + 2;
+    }
+
     overlays.push({
       line: state.line,
-      text: shown.map((item) => `${item.name} = ${shorten(item.value)}`).join(', '),
-      names: shown.map((item) => item.name),
-      hiddenCount: chosen.length - shown.length,
+      text: parts.join(', '),
+      names,
+      hiddenCount: chosen.length - parts.length,
       kind,
     });
   }

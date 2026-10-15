@@ -26,6 +26,16 @@ import {
 import type { CType } from '@/lang/ctype';
 import { makeDiagnostic } from '@/lang/diagnostics';
 import { Memory, MemoryError } from '@/lang/memory';
+import {
+  CONTAINER_PREVIEW_LIMIT,
+  MAX_SEQUENCE_DEPTH,
+  VECTOR_CAPACITY_OFFSET,
+  VECTOR_COUNT_OFFSET,
+  VECTOR_DATA_OFFSET,
+  VECTOR_ELEMENT_KIND_OFFSET,
+  VECTOR_ELEMENT_SIZE_OFFSET,
+  readVectorLayout,
+} from '@/lang/runtime/container';
 import { INTERPRETER_BUILTINS, SIMPLE_BUILTINS } from '@/lang/runtime/builtins';
 import type { SimpleBuiltinContext } from '@/lang/runtime/builtins';
 import { formatC } from '@/lang/runtime/printf';
@@ -1922,8 +1932,8 @@ class Interpreter {
   private vectorElement(address: number, type: CType): CType {
     const declared = type.element;
     if (declared && declared.kind !== 'unknown') return declared;
-    const code = this.memory.readInt32(address + 24);
-    const size = this.memory.readInt32(address + 28);
+    const code = this.memory.readInt32(address + VECTOR_ELEMENT_KIND_OFFSET);
+    const size = this.memory.readInt32(address + VECTOR_ELEMENT_SIZE_OFFSET);
     return elementTypeFromCode(code, size);
   }
 
@@ -1936,15 +1946,23 @@ class Interpreter {
 
     items.forEach((item, index) => {
       if (item.kind === 'init-list') return;
+      const slot = data + index * elementSize;
+      // A `std::string` element is a string object, not the characters of the
+      // literal: storing the bytes would later be read back as a data pointer,
+      // which is exactly what made `vector<string>` unreadable.
+      if (isStringType(element)) {
+        this.createString(slot, this.stringTextOf(this.evaluate(item)));
+        return;
+      }
       const value = convertTo(element, this.evaluate(item));
-      this.store(element, data + index * elementSize, value);
+      this.store(element, slot, value);
     });
 
-    this.memory.writeUint64(address, data);
-    this.memory.writeInt64(address + 8, items.length);
-    this.memory.writeInt64(address + 16, capacity);
-    this.memory.writeInt32(address + 24, elementKindCode(element));
-    this.memory.writeInt32(address + 28, elementSize);
+    this.memory.writeUint64(address + VECTOR_DATA_OFFSET, data);
+    this.memory.writeInt64(address + VECTOR_COUNT_OFFSET, items.length);
+    this.memory.writeInt64(address + VECTOR_CAPACITY_OFFSET, capacity);
+    this.memory.writeInt32(address + VECTOR_ELEMENT_KIND_OFFSET, elementKindCode(element));
+    this.memory.writeInt32(address + VECTOR_ELEMENT_SIZE_OFFSET, elementSize);
   }
 
   private copyVector(
@@ -1985,8 +2003,21 @@ class Interpreter {
       this.memory.writeInt64(address + 16, capacity);
     }
 
-    this.store(element, data + size * elementSize, convertTo(element, argument));
-    this.memory.writeInt64(address + 8, size + 1);
+    const slot = data + size * elementSize;
+    if (isStringType(element)) {
+      this.createString(slot, this.stringTextOf(argument));
+    } else {
+      this.store(element, slot, convertTo(element, argument));
+    }
+    this.memory.writeInt64(address + VECTOR_COUNT_OFFSET, size + 1);
+  }
+
+  /** The text a value carries, for building a `std::string` element. */
+  private stringTextOf(value: Value): string {
+    if (value.kind === 'aggregate' && isStringType(value.type)) {
+      return this.stringText(value.address);
+    }
+    return this.readStringValue(value);
   }
 
   private createString(address: number, text: string): void {
@@ -2791,12 +2822,77 @@ class Interpreter {
     return {
       name: binding.name,
       type: binding.type.name,
-      value: formatValue(value, this.memory),
+      value: this.describeValue(value),
       scope: binding.scopeName,
       changed: false,
       line: binding.declaredAt.line,
       ...(children.length > 0 ? { children } : {}),
     };
+  }
+
+  /**
+   * The one-line summary of a value for the watch pane, the inline overlay and the
+   * iteration table.
+   *
+   * Sequences render as `[1, 2, 3]` instead of a type name and an address: the
+   * address is an implementation detail of this interpreter and tells the reader
+   * nothing about the data. At most CONTAINER_PREVIEW_LIMIT elements are shown and
+   * the remainder is counted, so a long vector never looks like it ended early.
+   */
+  private describeValue(value: Value, depth = MAX_SEQUENCE_DEPTH): string {
+    if (value.kind === 'aggregate' && depth > 0) {
+      if (isVectorType(value.type)) {
+        const layout = readVectorLayout(this.memory, value.address, value.type.element);
+        return this.describeElements(layout.data, layout.count, layout.element, depth);
+      }
+
+      if (value.type.kind === 'array' && value.type.element) {
+        // `char[N]` is how C spells a string, and `"abc"` reads far better than
+        // three separate characters.
+        if (value.type.element.kind === 'char') {
+          return `"${this.memory.readCString(value.address, 256)}"`;
+        }
+        if (value.type.length !== undefined) {
+          return this.describeElements(
+            value.address,
+            value.type.length,
+            value.type.element,
+            depth,
+          );
+        }
+      }
+    }
+
+    return formatValue(value, this.memory);
+  }
+
+  private describeElements(
+    data: number,
+    count: number,
+    element: CType,
+    depth: number,
+  ): string {
+    if (count <= 0) return '[]';
+
+    const shown = Math.min(count, CONTAINER_PREVIEW_LIMIT);
+    const stride = Math.max(element.size, 1);
+    const parts: string[] = [];
+    for (let index = 0; index < shown; index += 1) {
+      parts.push(this.describeElement(this.load(element, data + index * stride), depth - 1));
+    }
+
+    const hidden = count - shown;
+    if (hidden > 0) parts.push(`+${hidden} more`);
+    return `[${parts.join(', ')}]`;
+  }
+
+  /** Inside a sequence, `'a' (97)` is noise; the character alone reads better. */
+  private describeElement(value: Value, depth: number): string {
+    if (value.kind === 'int' && value.type.kind === 'char') {
+      const code = value.value & 0xff;
+      return code >= 32 && code < 127 ? `'${String.fromCharCode(code)}'` : `${value.value}`;
+    }
+    return this.describeValue(value, depth);
   }
 
   /**
@@ -2816,7 +2912,7 @@ class Interpreter {
       children.push({
         name,
         type: childType.name,
-        value: formatValue(childValue, this.memory),
+        value: this.describeValue(childValue),
         scope: '',
         changed: false,
         line: 0,

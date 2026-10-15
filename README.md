@@ -139,6 +139,11 @@ Explorer ở cột trái quản lý danh sách file; mọi thứ được lưu v
   ra/thay đổi** biến thì hiện đúng biến đó (tối đa 3 tên + `(+k)`); dòng không đổi gì (`printf`, `return`,
   `if`) thì hiện **biến đang trong scope**, mờ hơn — nên hầu như dòng nào cũng đọc được giá trị, giống inline
   values của debugger. Bật/tắt bằng nút **Inline values**. Dòng chưa chạy thì không có gì (không bịa).
+- **Container hiển thị dạng `[value, value, ...]`**: `std::vector` và mảng C hiện **phần tử**, không phải
+  `std::vector<int> @ 0x1f40` (địa chỉ là chi tiết nội bộ của interpreter, không nói gì về dữ liệu). Tối đa
+  **20 phần tử**, phần còn lại được **đếm ra** (`[0, 1, ..., 19, +5 more]`) nên danh sách dài không bao giờ trông
+  như đã hết. `char[N]` hiện như chuỗi (`"abc"`) vì đó là điều C muốn nói; `vector<string>` hiện `["alpha", "beta"]`;
+  `vector<char>` hiện `['h', 'i']` (không kèm mã số); lồng nhau được (`[[1, 2], [3]]`, sâu tối đa 3 tầng).
 - **Watch pane 3 chế độ**: `At cursor` (mặc định, state tại dòng con trỏ), `Timeline` (scrub qua từng lần gán
   biến *và* từng vòng lặp, nhãn `iteration 2 of the loop on line 3`), `Final` (state sau khi chạy xong).
 - **Highlight giá trị đổi**: biến vừa đổi (hoặc vừa xuất hiện) được tô đỏ, kèm bộ đếm `n changed`.
@@ -198,6 +203,16 @@ trỏ chưa từng chạy, pane nói rõ và lùi về dòng gần nhất trư�
 Số nguyên 64-bit giữ độ chính xác của `double`; `class`/`namespace`/`STL` đầy đủ (map, set, template class,
 exception) chưa thực thi được; chưa có I/O file. Đây là ranh giới của fast engine, và nó luôn nói ra thay vì
 đoán.
+
+Parser của fast engine cũng chưa nhận `std::vector<std::vector<int>>` viết liền (cần `> >`) và init list lồng
+nhau (`{{1, 2}, {3}}`) — **Run bằng clang thì nhận cả hai**. Pane Watch là để xem nhanh trong lúc gõ, nên ranh
+giới này được ghi ra thay vì che đi.
+
+**Một bug thật đã lộ ra khi làm phần hiển thị container**: `std::vector<std::string>` lưu phần tử dưới dạng
+**ký tự thô của literal** thay vì một string object, nên khi đọc lại thì 8 byte đầu của `"alpha"` bị hiểu là con
+trỏ và làm **crash toàn bộ watch snapshot** (`invalid memory access at 0x6168706c61`). Đã sửa: phần tử
+`std::string` được tạo bằng `createString` như mọi nơi khác, và có test cho cả `{"alpha", "beta"}` lẫn
+`push_back` lúc chạy.
 
 ### M1 có gì
 

@@ -88,14 +88,38 @@ describe('inlineValuesFor', () => {
     expect(overlayText(overlay!)).toBe('// a = 1, b = 2, c = 3 (+2)');
   });
 
-  it('shortens very long values so the line stays readable', () => {
-    const watch = snapshot([{ line: 2, vars: [variable('text', 'x'.repeat(80))] }]);
+  it('shortens a very long scalar so the line stays readable', () => {
+    const watch = snapshot([{ line: 2, vars: [variable('text', 'x'.repeat(400))] }]);
     const overlay = inlineValuesFor(watch)[0];
 
     // The cap applies to the value, not to the `name = ` prefix.
     const shownValue = overlay?.text.split(' = ')[1] ?? '';
-    expect(shownValue.length).toBeLessThanOrEqual(28);
     expect(shownValue.endsWith('…')).toBe(true);
+    expect(shownValue.length).toBeLessThan(200);
+  });
+
+  it('keeps a 20-element container preview intact', () => {
+    // 20 elements is roughly 80 characters. The old 28-character cap cut every
+    // vector off mid-list, which is what made its preview unreadable.
+    const values = `[${Array.from({ length: 20 }, (_, index) => index).join(', ')}]`;
+    const watch = snapshot([{ line: 2, vars: [variable('numbers', values)] }]);
+
+    const overlay = inlineValuesFor(watch)[0];
+    expect(overlay?.text).toBe(`numbers = ${values}`);
+    expect(overlay?.text).not.toContain('…');
+  });
+
+  it('stops adding names once the overlay is already wide', () => {
+    const wide = `[${'1, '.repeat(60)}1]`;
+    const watch = snapshot([
+      { line: 2, vars: [variable('a', wide), variable('b', wide), variable('c', wide)] },
+    ]);
+
+    const overlay = inlineValuesFor(watch)[0];
+    // One value is always shown, and the rest are counted rather than dropped
+    // silently.
+    expect(overlay?.names).toEqual(['a']);
+    expect(overlay?.hiddenCount).toBe(2);
   });
 
   it('produces nothing for a program that never ran', () => {
