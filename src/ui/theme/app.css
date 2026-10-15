@@ -632,6 +632,36 @@ button {
   cursor: help;
 }
 
+/* ---------- install and update offers ---------- */
+
+.statusbar__action {
+  height: 18px;
+  padding: 0 8px;
+  margin-right: 6px;
+  border: 1px solid var(--vs-border);
+  border-radius: var(--vs-radius);
+  background: transparent;
+  color: var(--vs-accent);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.statusbar__action:hover {
+  border-color: var(--vs-accent);
+  background: rgba(86, 156, 214, 0.12);
+}
+
+/* A new version is worth noticing: the app is one reload behind until it is taken. */
+.statusbar__action--update {
+  background: rgba(86, 156, 214, 0.16);
+  border-color: var(--vs-accent);
+}
+
+.statusbar__item--offline {
+  color: var(--vs-warning);
+}
+
 /* ---------- narrow layout (phones, small windows) ---------- */
 
 .mobile-tabs {

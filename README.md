@@ -214,6 +214,28 @@ Default workspace là **cả project**: `main.cpp` (tour STL: container, algorit
 `main` còn lại **bị bỏ qua và được báo rõ** trên console (`cjit: entry point: main.cpp — bỏ qua hello.c …`). Project không có `main` nào thì cũng
 được nói thẳng thay vì để lld báo `undefined symbol`.
 
+### PWA: cài được và chạy offline
+
+`public/manifest.webmanifest`: `display: standalone`, `theme_color`/`background_color` = `#1e1e1e` (màu VS dark), icon 192/512 (+ bản
+**maskable**), `start_url`/`scope` để **một build chạy được cả ở domain root lẫn `/<repo>/`**. Icon sinh bằng `python scripts/make-icons.py`
+(Pillow) chứ không phải blob nhị phân không ai tái tạo được.
+
+**Service worker** (`src/pwa/serviceWorker.ts`, build riêng thành `dist/sw.js` — script **classic**, tên **cố định**, vì Firefox không chạy module
+service worker và tên có hash sẽ để worker cũ tiếp tục nắm quyền):
+
+| Loại request | Chiến lược |
+|---|---|
+| `index.html` / navigation | **network-first** — cache `index.html` là cách một bản deploy không bao giờ tới được người dùng; offline thì bản cache là thứ mở được app |
+| asset có hash (`assets/index-*.js`) | **cache-first** — hash trong tên nên cache không thể cũ |
+| `toolchain/` (58 MB) | **skip** — đã nằm IndexedDB, cache lại là lưu 2 lần vô ích |
+| khác origin / non-GET / `@vite`, `node_modules`, `?t=` | **skip** |
+
+Vì vậy **Run vẫn chạy offline sau lần tải đầu**: toolchain từ IndexedDB, app shell + JS từ Cache API.
+
+Quyết định cache nằm ở `src/pwa/cachePolicy.ts` — module thuần, **không** đụng `self`/`caches`, nên test được trực tiếp (10 test). UI: nút **⬇ Cài đặt
+app** khi browser cho phép cài, **⟳ Có bản mới — Reload** khi có worker mới đang chờ (worker **không** tự chiếm quyền khi bạn đang gõ dở), và nhãn
+`offline` khi mất mạng. Service worker **không** đăng ký ở dev — nó sẽ cache module graph và giấu mọi sửa đổi.
+
 ### Console: các tab, gồm Runtime issues và Memory
 
 `Output` · `Problems` · **`Runtime`** · **`Memory`** · `Stdin`. Tab **Runtime** gom những gì chương trình làm mà compiler chấp

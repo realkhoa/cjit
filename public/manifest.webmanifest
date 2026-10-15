@@ -1,0 +1,35 @@
+{
+  "name": "C/C++ Studio",
+  "short_name": "C++ Studio",
+  "description": "Client-only C/C++ editor: viết, chạy thật bằng clang-wasm, và xem giá trị biến ngay khi gõ. Không backend.",
+  "lang": "vi",
+  "dir": "ltr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "theme_color": "#1e1e1e",
+  "background_color": "#1e1e1e",
+  "categories": ["developer", "education", "productivity"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
