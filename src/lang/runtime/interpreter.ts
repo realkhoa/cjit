@@ -5,6 +5,8 @@ import type {
   Expression,
   FunctionDeclNode,
   LambdaExpr,
+
+
   Statement,
   StructDeclNode,
   TranslationUnit,
@@ -1531,6 +1533,10 @@ class Interpreter {
         return this.literalValue(expression);
       case 'lambda':
         return this.makeClosure(expression);
+      case 'new':
+        return this.evaluateNew(expression);
+      case 'delete':
+        return this.evaluateDelete(expression);
       case 'identifier':
         return this.loadIdentifier(expression.name, expression.start);
       case 'binary':
@@ -2635,6 +2641,75 @@ class Interpreter {
     }
   }
 
+  /**
+   * `new T(42)`, `new T`, `new T[n]`.
+   *
+   * The allocator is the one `malloc` already uses; this is the C++ spelling, and a
+   * program that fails on `new` fails on most real C++. An object of a class runs its
+   * constructor here, which is what makes `new Counter()` a built object rather than
+   * eight bytes.
+   */
+  private evaluateNew(expression: Extract<Expression, { kind: 'new' }>): Value {
+    const type = this.resolver.resolve(expression.ofType);
+    const size = Math.max(type.size, 1);
+    const tag = bareTagName(type.name);
+
+    if (expression.arrayLength) {
+      const count = Math.max(Math.trunc(toNumber(this.evaluate(expression.arrayLength))), 0);
+      const address = this.memory.alloc(Math.max(count * size, 1), alignOf(type));
+
+      // `new Counter[3]` builds three objects, so their constructors run.
+      const constructor = this.constructors.get(tag)?.get(0);
+      if (constructor) {
+        for (let index = 0; index < count; index += 1) {
+          this.callFunction(constructor, [], address + index * size, type);
+        }
+      }
+      return pointerValue(type, address);
+    }
+
+    const address = this.memory.alloc(size, alignOf(type));
+    const constructors = this.constructors.get(tag);
+
+    if (constructors) {
+      const constructor = constructors.get(expression.args.length);
+      if (!constructor) {
+        throw new RuntimeFault(
+          `'${tag}' has no constructor taking ${expression.args.length} argument(s)`,
+          expression.start,
+        );
+      }
+      this.callFunction(constructor, this.callArguments(expression.args, constructor), address, type);
+    } else if (expression.args.length > 0) {
+      // `new int(42)`: one value initialises the object, as C++ writes it.
+      const first = expression.args[0] as Expression | undefined;
+      if (first) this.store(type, address, this.valueForType(type, this.evaluateRaw(first)));
+    }
+
+    return pointerValue(type, address);
+  }
+
+  /** `delete p`, `delete[] p`. Deleting a null pointer does nothing, as C++ says. */
+  private evaluateDelete(expression: Extract<Expression, { kind: 'delete' }>): Value {
+    const pointer = this.decay(this.evaluate(expression.operand));
+    const address = toPointerAddress(pointer);
+    if (address === null || address === 0) return voidValue();
+
+    const type = pointer.type.pointee;
+    const destructor = type ? this.destructors.get(bareTagName(type.name)) : undefined;
+    if (destructor && type) this.callFunction(destructor, [], address, type);
+
+    try {
+      this.memory.free(address);
+      this.allocations.delete(address);
+      this.userAllocations.delete(address);
+      this.slotTypes.delete(address);
+    } catch {
+      throw new RuntimeFault('delete of a pointer that was not allocated with new', expression.start);
+    }
+    return voidValue();
+  }
+
   /** The declared type of whatever lives at an address, for a by-reference capture. */
   private typeOfBindingAt(address: number): CType {
     for (const binding of this.allBindings) {
@@ -3010,6 +3085,15 @@ class Interpreter {
 
   private callFunctionPointer(value: Value, args: readonly Value[]): Value {
     const address = toPointerAddress(value);
+
+    /*
+     * A lambda is an address too, which is what makes
+     * `std::sort(v.begin(), v.end(), [](int a, int b) { return a > b; })` work: the
+     * comparator arrives here and is a closure rather than a named function.
+     */
+    const closure = address !== null ? this.closures.get(address) : undefined;
+    if (closure) return this.callClosure(closure, args);
+
     const name = address !== null ? this.functionTable[address] : undefined;
     const declaration = name ? this.definitions.get(name) : undefined;
     if (!declaration) throw new RuntimeFault('call through an invalid function pointer', this.unit.start);

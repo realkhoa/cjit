@@ -8,6 +8,8 @@ import type {
   FunctionDeclNode,
   InitListExpr,
   LambdaExpr,
+
+
   MemberDecl,
   MethodDecl,
   ParamDecl,
@@ -1607,11 +1609,6 @@ class Parser {
       if (token.text === 'sizeof' || token.text === '_Alignof' || token.text === 'alignof') {
         return this.parseSizeof(token);
       }
-      if (token.text === 'new' || token.text === 'delete') {
-        this.warn(token, `C++ "${token.text}" is not executable on the fast engine`);
-        this.skipToStatementEnd();
-        return { kind: 'unknown', text: token.text, start: token.start, end: this.previousEnd() };
-      }
       if (
         token.text === 'static_cast' ||
         token.text === 'dynamic_cast' ||
@@ -1748,6 +1745,15 @@ class Parser {
     }
 
     if (token.kind === 'keyword') {
+      /*
+       * `new` and `delete` first: they are keywords, and the identifier branch below
+       * accepts keywords as names too - so `new int(42)` was read as an identifier called
+       * `new` before this case could be reached.
+       */
+      if (token.text === 'new' || token.text === 'delete') {
+        return this.parseNewOrDelete();
+      }
+
       if (token.text === 'true' || token.text === 'false') {
         this.advance();
         return {
@@ -2037,6 +2043,70 @@ class Parser {
     };
   }
 
+  /** `new T(42)`, `new T[n]`, `delete p` and `delete[] p`. */
+  private parseNewOrDelete(): Expression {
+    if (this.check('new')) {
+      const keyword = this.advance();
+
+      /*
+       * A type name, not a declarator: `parseTypeName` would read `int(42)` as a function
+       * declarator and swallow the constructor arguments, which is how `new int(42)`
+       * failed with "expected a parameter declaration, found 42".
+       */
+      const spec = this.parseDeclarationSpecifiers();
+      let ofType = spec.type;
+      while (this.check('*') || this.check('&')) {
+        const pointerToken = this.advance();
+        ofType = this.wrapPointer(ofType, pointerToken.start, pointerToken.end);
+      }
+      if (!spec.consumed) this.error(keyword, "expected a type after 'new'");
+
+      let arrayLength: Expression | undefined;
+      const args: Expression[] = [];
+
+      if (this.check('[')) {
+        this.advance();
+        if (!this.check(']')) arrayLength = this.parseExpression();
+        this.expect(']', "expected ']' after the array size");
+      } else if (this.check('(')) {
+        this.advance();
+        if (!this.check(')')) {
+          for (;;) {
+            args.push(this.parseAssignmentExpression());
+            if (this.check(',')) {
+              this.advance();
+              continue;
+            }
+            break;
+          }
+        }
+        this.expect(')', "expected ')' after the constructor arguments");
+      } else if (this.check('{')) {
+        const initializer = this.parseInitList();
+        args.push(...initializer.items);
+      }
+
+      return {
+        kind: 'new',
+        ofType,
+        args,
+        ...(arrayLength ? { arrayLength } : {}),
+        start: keyword.start,
+        end: this.previousEnd(),
+      };
+    }
+
+    const keyword = this.advance();
+    let isArray = false;
+    if (this.check('[')) {
+      this.advance();
+      this.expect(']', "expected ']' in delete[]");
+      isArray = true;
+    }
+    const operand = this.parseUnaryExpression();
+    return { kind: 'delete', operand, isArray, start: keyword.start, end: this.previousEnd() };
+  }
+
   private parseUsing(): Declaration[] {
     const usingToken = this.advance();
 
@@ -2121,6 +2191,13 @@ class Parser {
       this.advance();
       return undefined;
     }
+
+    /*
+     * `new` and `delete` are expressions, and the expression parser reads them - so they
+     * must not be skipped here. This check runs before every statement, which is how a
+     * `delete p;` used to be swallowed whole.
+     */
+    if (token.text === 'new' || token.text === 'delete') return undefined;
 
     const start = token.start;
     this.warn(

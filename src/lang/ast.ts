@@ -157,6 +157,26 @@ export interface SizeofExpr extends Node {
   readonly ofExpression?: Expression;
 }
 
+/**
+ * `new T(args)`, `new T[n]` and `delete p` / `delete[] p`.
+ *
+ * The engine has the allocator already; these are the operators C++ spells the same
+ * thing with, and a program that fails on `new` fails on most real C++.
+ */
+export interface NewExpr extends Node {
+  readonly kind: 'new';
+  readonly ofType: TypeRef;
+  readonly args: readonly Expression[];
+  /** `new T[n]`: how many elements. */
+  readonly arrayLength?: Expression;
+}
+
+export interface DeleteExpr extends Node {
+  readonly kind: 'delete';
+  readonly operand: Expression;
+  readonly isArray: boolean;
+}
+
 export interface InitListExpr extends Node {
   readonly kind: 'init-list';
   readonly items: readonly Expression[];
@@ -197,6 +217,8 @@ export type Expression =
   | SizeofExpr
   | InitListExpr
   | LambdaExpr
+  | NewExpr
+  | DeleteExpr
   | UnknownExpr;
 
 export interface VarDecl extends Node {
