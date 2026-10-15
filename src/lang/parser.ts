@@ -15,7 +15,7 @@ import type {
   UnknownDeclNode,
 } from '@/lang/ast';
 import { makeDiagnostic } from '@/lang/diagnostics';
-import { BUILTIN_TYPE_NAMES, isCppOnlyKeyword } from '@/lang/keywords';
+import { BUILTIN_TYPE_NAMES, STD_TYPE_NAMES, isCppOnlyKeyword } from '@/lang/keywords';
 import type { SourcePos, Token } from '@/lang/token';
 
 /**
@@ -96,6 +96,10 @@ class Parser {
   private readonly diagnostics: Diagnostic[] = [];
   private readonly typedefs = new Set<string>(BUILTIN_TYPE_NAMES);
   private readonly tags = new Set<string>();
+  /** Set by `using namespace std;`, so bare standard type names parse. */
+  private usingNamespaceStd = false;
+  /** Names from `using std::string;` and friends. */
+  private readonly usingNames = new Set<string>();
   private depth = 0;
 
   constructor(
@@ -231,8 +235,31 @@ class Parser {
     // type name. `foo * bar;` only becomes a declaration when `foo` is a typedef,
     // which is exactly the classic C ambiguity and why typedefs are tracked.
     if (this.isTypeSpecifierToken(this.peek())) return true;
+    // `using namespace std;` and `using std::cout;` change which names resolve, so
+    // they are declarations rather than expressions - otherwise `using` is read as an
+    // identifier and the line fails as a malformed expression.
+    if (this.check('using')) return true;
     // C++ spellings the engine resolves itself: `std::vector<int> v;`, `std::string s;`.
-    return this.templateDeclarationAhead() || this.qualifiedTypeAhead();
+    // An *unqualified* standard name only counts once a `using` has brought it into
+    // scope, which is what a native compiler requires too.
+    return (
+      this.templateDeclarationAhead() || this.qualifiedTypeAhead() || this.importedTypeAhead()
+    );
+  }
+
+  /**
+   * `string s;`, `map<int, int> counts;` after `using namespace std;` - or after
+   * `using std::string;` for that one name.
+   */
+  private importedTypeAhead(): boolean {
+    const token = this.peek();
+    if (token.kind !== 'identifier' && token.kind !== 'keyword') return false;
+    if (!STD_TYPE_NAMES.has(token.text)) return false;
+    if (!this.usingNamespaceStd && !this.usingNames.has(token.text)) return false;
+
+    // A type name on its own is not a declaration: something has to be declared.
+    const next = this.tokenAt(this.index + 1);
+    return next !== undefined && (this.isNameToken(next) || next.text === '*' || next.text === '&');
   }
 
   /**
@@ -381,9 +408,17 @@ class Parser {
       // Qualified or templated C++ type: `std::string`, `std::vector<int>`,
       // `vector<T>`. The engine resolves these at runtime, so they are parsed as
       // ordinary named types instead of being skipped.
+      const nextText = this.tokenAt(this.index + 1)?.text;
+      const qualifiedOrTemplated = nextText === '::' || nextText === '<';
+      // A bare standard name, once a `using` has put it in scope: `string s;`. Without
+      // that a native compiler rejects it too, and so does this.
+      const importedStd =
+        STD_TYPE_NAMES.has(token.text) &&
+        (this.usingNamespaceStd || this.usingNames.has(token.text));
+
       if (
         (token.kind === 'identifier' || token.kind === 'keyword') &&
-        (this.tokenAt(this.index + 1)?.text === '::' || this.tokenAt(this.index + 1)?.text === '<')
+        (qualifiedOrTemplated || importedStd)
       ) {
         let name = token.text;
         this.advance();
@@ -799,6 +834,16 @@ class Parser {
     // would otherwise skip the whole template as a C++-only feature.
     this.parseTemplateHeader();
 
+    /*
+     * `using` is handled before the unsupported-construct check, which would
+     * otherwise skip it: `using namespace std;` decides which names resolve, so
+     * skipping it means valid C++ fails to find `cout`.
+     */
+    if (this.check('using')) {
+      const handled = this.parseUsing();
+      if (handled) return handled;
+    }
+
     const skipped = this.detectUnsupportedConstruct();
     if (skipped) return [skipped];
 
@@ -811,7 +856,6 @@ class Parser {
     }
 
     this.skipAttributes();
-
     const spec = this.parseDeclarationSpecifiers();
     if (!spec.consumed) {
       const token = this.peek();
@@ -1612,6 +1656,77 @@ class Parser {
         if (depth <= 0) return;
       } else if (token.text === ';' || token.text === '{') return;
     }
+  }
+
+  /**
+   * `using namespace std;`, `using std::cout;` and `using ll = long long;`.
+   *
+   * These decide which names resolve, so skipping them means valid C++ fails to find
+   * `cout` - the engine would be rejecting code a native compiler accepts, which is the
+   * wrong way round. The first two become a `using` declaration the interpreter reads;
+   * the third is an ordinary typedef under another spelling.
+   */
+  private parseUsing(): Declaration[] {
+    const usingToken = this.advance();
+
+    const readQualifiedName = (): string => {
+      let text = this.advance().text;
+      while (this.check('::')) {
+        this.advance();
+        const part = this.peek();
+        if (!this.isNameToken(part)) break;
+        text += `::${part.text}`;
+        this.advance();
+      }
+      return text;
+    };
+
+    if (this.check('namespace')) {
+      this.advance();
+      const names: string[] = [];
+      while (this.isNameToken(this.peek()) && !this.check(';')) {
+        names.push(readQualifiedName());
+        if (this.check(',')) {
+          this.advance();
+          continue;
+        }
+        break;
+      }
+      this.expect(';', "expected ';' after using namespace");
+      // Remembered so later declarations can tell whether a bare `string` is in scope.
+      if (names.includes('std')) this.usingNamespaceStd = true;
+      return [
+        { kind: 'using', isNamespace: true, names, start: usingToken.start, end: this.previousEnd() },
+      ];
+    }
+
+    // `using ll = long long;` - a typedef, so the resolver learns the alias.
+    if (this.isNameToken(this.peek()) && this.tokenAt(this.index + 1)?.text === '=') {
+      const alias = this.advance();
+      this.advance();
+      const spec = this.parseDeclarationSpecifiers();
+      const type = this.parseDeclarator(spec.type).type;
+      this.typedefs.add(alias.text);
+      this.expect(';', "expected ';' after the type alias");
+      return [
+        { kind: 'typedef', name: alias.text, type, start: usingToken.start, end: this.previousEnd() },
+      ];
+    }
+
+    const names: string[] = [];
+    while (this.isNameToken(this.peek()) && !this.check(';')) {
+      names.push(readQualifiedName());
+      if (this.check(',')) {
+        this.advance();
+        continue;
+      }
+      break;
+    }
+    this.expect(';', "expected ';' after using");
+    for (const name of names) this.usingNames.add(name.replace(/^std::/, ''));
+    return [
+      { kind: 'using', isNamespace: false, names, start: usingToken.start, end: this.previousEnd() },
+    ];
   }
 
   /**

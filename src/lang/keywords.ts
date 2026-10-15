@@ -45,6 +45,24 @@ export const BUILTIN_TYPE_NAMES: ReadonlySet<string> = new Set([
   'intptr_t', 'uintptr_t', 'NULL', 'FILE', 'va_list', 'time_t',
 ]);
 
+/**
+ * Standard library types the engine simulates, by their bare names.
+ *
+ * Used to recognise `string s;` once a `using namespace std;` has brought the name into
+ * scope - the same thing a native compiler requires, which is why this set is separate
+ * from the container list in the type resolver.
+ */
+export const STD_TYPE_NAMES: ReadonlySet<string> = new Set([
+  'string', 'wstring',
+  'vector', 'deque', 'list', 'forward_list',
+  'set', 'multiset', 'unordered_set',
+  'map', 'multimap', 'unordered_map',
+  'stack', 'queue', 'priority_queue',
+  'pair', 'tuple', 'array', 'optional', 'variant', 'complex',
+  'ostream', 'istream', 'iostream', 'stringstream',
+  'function', 'initializer_list',
+]);
+
 export function isKeyword(text: string): boolean {
   return KEYWORDS.has(text);
 }

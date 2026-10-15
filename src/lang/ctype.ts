@@ -597,8 +597,20 @@ export class TypeResolver {
     const typedef = this.typedefs.get(name);
     if (typedef) {
       const resolved = this.resolve(typedef, depth + 1);
-      // Keep the typedef's own spelling for display.
-      return resolved.name === name ? resolved : { ...resolved, name };
+      /*
+       * Keep the typedef's own spelling for display - except for the types whose name
+       * decides how they behave. `using str = std::string;` must stay a string, and
+       * renaming it to `str` made `isStringType` false: the value was then stored as
+       * raw bytes and the pane showed an address instead of the text.
+       */
+      const behavioural =
+        isStringType(resolved) ||
+        isPairType(resolved) ||
+        containerKindOf(resolved) !== null ||
+        resolved.kind === 'array' ||
+        resolved.kind === 'pointer';
+      if (behavioural || resolved.name === name) return resolved;
+      return { ...resolved, name };
     }
 
     const enumType = this.enums.get(name);

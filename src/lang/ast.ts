@@ -201,12 +201,28 @@ export interface UnknownDeclNode extends Node {
   readonly text: string;
 }
 
+/**
+ * `using namespace std;` - and `using std::cout;`, which is the same thing for one
+ * name.
+ *
+ * These change which names resolve, so they are a declaration rather than something
+ * skipped: without them a program that is valid C++ fails to find `cout`.
+ */
+export interface UsingDeclNode extends Node {
+  readonly kind: 'using';
+  /** True for `using namespace X;`. */
+  readonly isNamespace: boolean;
+  /** The names brought into scope: `std` for a namespace, `std::cout` for a name. */
+  readonly names: readonly string[];
+}
+
 export type Declaration =
   | VarDecl
   | TypedefDeclNode
   | StructDeclNode
   | EnumDeclNode
   | FunctionDeclNode
+  | UsingDeclNode
   | UnknownDeclNode;
 
 export interface CompoundStmt extends Node {

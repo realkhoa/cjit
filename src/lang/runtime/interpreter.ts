@@ -378,6 +378,7 @@ function isDeclarationKind(kind: string): boolean {
     kind === 'struct' ||
     kind === 'enum' ||
     kind === 'function' ||
+    kind === 'using' ||
     kind === 'unknown-decl'
   );
 }
@@ -417,6 +418,10 @@ class Interpreter {
    * out of a four-byte write is how a template's `int` return came back as a double.
    */
   private readonly slotTypes = new Map<number, CType>();
+  /** Set by `using namespace std;`, which the parser records as a declaration. */
+  private stdNamespaceImported = false;
+  /** Bare names from `using std::cout;` and friends. */
+  private readonly importedNames = new Set<string>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -644,6 +649,16 @@ class Interpreter {
   private prepare(): void {
     // Types first: globals and parameters need sizes before anything is allocated.
     this.prepareTypes(this.unit.declarations);
+
+    /*
+     * `using` comes next, and before anything is executed: it decides which names
+     * resolve, so a global that mentions `cout` must already see it. File-scope
+     * declarations are not executed as statements, which is why this is here rather
+     * than only in the statement path.
+     */
+    for (const declaration of this.unit.declarations) {
+      if (declaration.kind === 'using') this.applyUsing(declaration);
+    }
 
     for (const declaration of this.unit.declarations) {
       if (declaration.kind === 'function') this.registerFunction(declaration);
@@ -1168,6 +1183,9 @@ class Interpreter {
 
   private executeDeclaration(declaration: Declaration): void {
     switch (declaration.kind) {
+      case 'using':
+        this.applyUsing(declaration);
+        return;
       case 'variable':
         this.declareVariable(declaration, 'local', this.currentScopeName());
         return;
@@ -1194,6 +1212,30 @@ class Interpreter {
           declaration.start,
         );
     }
+  }
+
+  /**
+   * `using namespace std;` and `using std::cout;`.
+   *
+   * They decide which bare names resolve. The engine already resolves the container
+   * *types* unqualified (`vector<int>`), but streams and manipulators are global
+   * objects, so `cout` has to be brought into scope the way C++ does it - otherwise a
+   * program that compiles with clang fails here, which is the wrong way round.
+   */
+  private applyUsing(declaration: Extract<Declaration, { kind: 'using' }>): void {
+    for (const name of declaration.names) {
+      if (declaration.isNamespace) {
+        // Only `std` exists in this engine, so importing anything else changes nothing.
+        if (name === 'std') this.stdNamespaceImported = true;
+        continue;
+      }
+      this.importedNames.add(name.replace(/^std::/, ''));
+    }
+  }
+
+  /** Whether a bare standard name is visible: `cout`, `endl`, ... */
+  private hasBareName(name: string): boolean {
+    return this.stdNamespaceImported || this.importedNames.has(name);
   }
 
   // ----------------------------------------------------------- expressions
@@ -1291,7 +1333,6 @@ class Interpreter {
     }
 
     const unsigned = /u/i.test(text);
-    const wide = /l/i.test(text);
     let body = text.replace(/[uUlL]+$/, '');
     let value = 0;
 
@@ -1301,6 +1342,15 @@ class Interpreter {
     else value = Number.parseInt(body, 10);
 
     if (Number.isNaN(value)) value = 0;
+
+    /*
+     * The type follows the value, as it does in C++: a decimal literal with no suffix
+     * is an `int` if it fits, otherwise a `long`. Typing them all as `int` truncated
+     * them - `9000000000` read back as 410065408, which is the value modulo 2^32, and a
+     * wrong number that looks like a number is the worst thing this engine can show.
+     */
+    const fitsInt = value >= -2147483648 && value <= 2147483647;
+    const wide = /l/i.test(text) || !fitsInt;
 
     const type: CType = wide
       ? { ...longType(), signed: !unsigned, name: unsigned ? 'unsigned long' : 'long' }
@@ -1314,6 +1364,21 @@ class Interpreter {
     if (name === 'std::cout') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream' } };
     if (name === 'std::cerr') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream:cerr' } };
     if (name === 'std::endl') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::endl' } };
+
+    /*
+     * The bare spellings, once `using namespace std;` or `using std::cout;` has said
+     * they are in scope. Deliberately not accepted without that: `cout << x` on its own
+     * does not compile with clang, and the fast engine must not teach otherwise.
+     */
+    if (
+      (name === 'cout' || name === 'cerr' || name === 'endl' || name === 'cin') &&
+      this.hasBareName(name)
+    ) {
+      if (name === 'cerr') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream:cerr' } };
+      if (name === 'endl') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::endl' } };
+      if (name === 'cin') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::istream' } };
+      return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream' } };
+    }
 
     if (name === 'NULL' || name === 'nullptr') return pointerValue(VOID_TYPE, 0);
 
