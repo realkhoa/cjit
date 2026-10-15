@@ -371,6 +371,29 @@ function collectNestedDeclarations(statement: Statement): Declaration[] {
   return out;
 }
 
+/**
+ * How `std::cout <<` writes a floating point number.
+ *
+ * C++'s default is `defaultfloat` with a precision of six significant digits: `2.5`
+ * stays `2.5`, `10.0 / 3.0` prints `3.33333`, and very large or very small values
+ * switch to scientific notation with a two-digit exponent. Printing the full double
+ * instead was a visible difference from a native compiler on the most ordinary code.
+ */
+export function formatDefaultFloat(value: number, precision = 6): string {
+  if (Number.isNaN(value)) return 'nan';
+  if (!Number.isFinite(value)) return value > 0 ? 'inf' : '-inf';
+  if (value === 0) return '0';
+
+  const exponent = Math.floor(Math.log10(Math.abs(value)));
+  if (exponent < -4 || exponent >= precision) {
+    return value
+      .toExponential(precision - 1)
+      .replace(/e([+-])(\d)$/, 'e$10$2');
+  }
+  // `toPrecision` pads with zeros; `Number` drops them, as the stream does.
+  return String(Number(value.toPrecision(precision)));
+}
+
 function isDeclarationKind(kind: string): boolean {
   return (
     kind === 'variable' ||
@@ -422,6 +445,10 @@ class Interpreter {
   private stdNamespaceImported = false;
   /** Bare names from `using std::cout;` and friends. */
   private readonly importedNames = new Set<string>();
+  /** First signature seen for each function name, to spot an overload. */
+  private readonly functionSignatures = new Map<string, string>();
+  /** Names defined more than once with different parameters: a call must refuse. */
+  private readonly overloadedNames = new Set<string>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -690,6 +717,36 @@ class Interpreter {
   }
 
   private registerFunction(declaration: FunctionDeclNode): void {
+    /*
+     * Overloading is not implemented, and a name defined twice must say so.
+     *
+     * Registering both silently kept the last one, so `void show(int)` plus
+     * `void show(double)` made every call print the double's output - a wrong answer
+     * with no warning at all. Refusing is the honest half of the contract: a program
+     * that cannot be run correctly is reported, not approximated.
+     */
+    const signature = declaration.params
+      .map((param) => `${param.type.name}${param.type.pointee ? '*' : ''}`)
+      .join(',');
+
+    const existing = this.functionSignatures.get(declaration.name);
+    if (existing !== undefined && existing !== signature) {
+      if (!this.overloadedNames.has(declaration.name)) {
+        this.overloadedNames.add(declaration.name);
+        this.diagnostics.push(
+          makeDiagnostic(
+            'warning',
+            `overloaded function '${declaration.name}' is not supported by the fast engine; Run (F5) uses clang-wasm`,
+            declaration.start.file,
+            declaration.start,
+            declaration.end,
+          ),
+        );
+      }
+    } else {
+      this.functionSignatures.set(declaration.name, signature);
+    }
+
     this.functions.set(declaration.name, declaration);
     if (!declaration.body) return;
     this.definitions.set(declaration.name, declaration);
@@ -1826,6 +1883,15 @@ class Interpreter {
 
     if (callee.kind === 'identifier') {
       const name = callee.name;
+
+      if (this.overloadedNames.has(name)) {
+        // Picking one would be a guess, and a guess here is a wrong answer.
+        throw new RuntimeFault(
+          `function '${name}' is overloaded, which the fast engine does not support yet`,
+          expression.start,
+        );
+      }
+
       const definition = this.definitions.get(name);
       if (definition) return this.callFunction(definition, this.callArguments(expression.args, definition));
 
@@ -2592,8 +2658,11 @@ class Interpreter {
     if (value.kind === 'int' && value.type.kind === 'char') {
       return String.fromCharCode(value.value & 0xff);
     }
-    // `std::cout << 4.0` prints "4", not the watch pane's "4.0".
-    if (value.kind === 'float') return `${value.value}`;
+    // A stream formats a floating point value the way C++ does by default: six
+    // significant digits, switching to scientific notation at the edges. Printing the
+    // full double made `10.0 / 3.0` read 3.3333333333333335 where a native compiler
+    // prints 3.33333.
+    if (value.kind === 'float') return formatDefaultFloat(value.value);
     return formatValue(value, this.memory);
   }
 
