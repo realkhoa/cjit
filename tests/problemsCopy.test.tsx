@@ -126,14 +126,9 @@ describe('Problems Tab Copy Button UI', () => {
     expect(writeTextMock).toHaveBeenCalledWith('main.cpp:42:3: error: unknown type name "Foo"');
   });
 
-  it('renders raw textarea with all error text for manual copy', () => {
+  it('does not render raw textarea console keeping clean copy button layout', () => {
     render(<ConsolePanel />);
-    const textarea = screen.getByRole('textbox', { name: /văn bản chẩn đoán lỗi/i }) as HTMLTextAreaElement;
-    expect(textarea).toBeTruthy();
-    expect(textarea.readOnly).toBe(true);
-    expect(textarea.value).toBe(
-      "main.cpp:42:3: error: unknown type name \"Foo\"\nmain.cpp:50:1: warning: comparison between signed and unsigned",
-    );
+    expect(screen.queryByRole('textbox', { name: /văn bản chẩn đoán lỗi/i })).toBeNull();
   });
 
   it('renders copy button in console header tools and copies all problems when clicked', async () => {

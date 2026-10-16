@@ -1775,45 +1775,6 @@ button {
   filter: brightness(1.1);
 }
 
-.problems__raw-wrapper {
-  margin: 6px 10px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.problems__raw-label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--vs-text-muted);
-}
-
-.problems__textarea {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: var(--vs-font-mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--vs-text);
-  background: var(--vs-editor-bg);
-  border: 1px solid var(--vs-border);
-  border-radius: 4px;
-  padding: 6px 8px;
-  resize: vertical;
-  white-space: pre;
-  overflow-wrap: normal;
-  overflow-x: auto;
-  user-select: text;
-  cursor: text;
-}
-
-.problems__textarea:focus {
-  outline: none;
-  border-color: var(--vs-accent);
-}
-
 .problems__list {
   display: flex;
   flex-direction: column;
