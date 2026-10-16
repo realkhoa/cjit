@@ -27,6 +27,7 @@ import {
   isNumericType,
   isPointerType,
   isPairType,
+  pairType,
   isStreamBuffer,
   isStringType,
   isVectorType,
@@ -2652,6 +2653,19 @@ class Interpreter {
       const helper = this.callCppHelper(name, expression.args, expression.start);
       if (helper !== undefined) return helper;
 
+      // C++ struct constructor call: Person{"Alice", 30} or IsEven{}
+      const resolvedType = this.resolver.resolveByName(name);
+      if (resolvedType.kind === 'struct' || resolvedType.kind === 'union') {
+        const address = this.allocateFor(resolvedType);
+        const constructor = this.constructors.get(name)?.get(expression.args.length);
+        if (constructor) {
+          this.callFunction(constructor, this.callArguments(expression.args, constructor), address, resolvedType);
+        } else if (expression.args.length > 0) {
+          this.initializeAggregate(resolvedType, address, expression.args);
+        }
+        return { kind: 'aggregate', type: resolvedType, address };
+      }
+
       // A prototype with no body: report it as such rather than as "unknown".
       const prototype = overloads?.[0] ?? this.functions.get(name);
       if (prototype) {
@@ -2726,6 +2740,17 @@ class Interpreter {
       const name = this.functionTable[address];
       const target = name ? this.functions.get(name) : undefined;
       if (target) return this.callFunction(target, this.callArguments(expression.args, target));
+    }
+
+    // Calling an object that overrides operator()
+    const functorTag = value.type.name ? bareTagName(value.type.name) : undefined;
+    if (functorTag) {
+      const opName = `${functorTag}::operator()`;
+      const target = this.definitions.get(opName);
+      if (target) {
+        const thisAddr = value.kind === 'aggregate' || value.kind === 'pointer' ? value.address : undefined;
+        return this.callFunction(target, this.callArguments(expression.args, target), thisAddr, value.type);
+      }
     }
 
     throw new RuntimeFault('call of a value that is not a function', expression.start);
@@ -4106,6 +4131,38 @@ class Interpreter {
           return pointerValue(element, data);
         case 'end':
           return pointerValue(element, data + size * stride);
+        case 'rbegin':
+          return pointerValue(element, size > 0 ? data + (size - 1) * stride : data);
+        case 'rend':
+          return pointerValue(element, data - stride);
+        case 'erase': {
+          const firstVal = toPointerAddress(this.decay(argumentAt(0)));
+          const secondVal = args[1] ? toPointerAddress(this.decay(argumentAt(1))) : undefined;
+          if (firstVal !== null) {
+            const firstIndex = Math.floor((firstVal - data) / stride);
+            if (secondVal !== undefined && secondVal !== null) {
+              const lastIndex = Math.floor((secondVal - data) / stride);
+              const removeCount = Math.max(lastIndex - firstIndex, 0);
+              if (removeCount > 0 && firstIndex >= 0 && lastIndex <= size) {
+                for (let i = lastIndex; i < size; i++) {
+                  const src = data + i * stride;
+                  const dst = data + (i - removeCount) * stride;
+                  this.memory.copy(src, dst, stride);
+                }
+                const newSize = size - removeCount;
+                this.memory.writeInt64(address + 8, newSize);
+              }
+            } else if (firstIndex >= 0 && firstIndex < size) {
+              for (let i = firstIndex + 1; i < size; i++) {
+                const src = data + i * stride;
+                const dst = data + (i - 1) * stride;
+                this.memory.copy(src, dst, stride);
+              }
+              this.memory.writeInt64(address + 8, size - 1);
+            }
+          }
+          return pointerValue(element, firstVal ?? data);
+        }
         case 'resize': {
           const wanted = Math.max(Math.trunc(toNumber(argumentAt(0))), 0);
           while (this.memory.readInt64(address + 8) < wanted) {
@@ -4147,6 +4204,10 @@ class Interpreter {
           return pointerValue(element, this.memory.readUint64(address));
         case 'end':
           return pointerValue(element, this.memory.readUint64(address) + size * Math.max(element.size, 1));
+        case 'rbegin':
+          return pointerValue(element, size > 0 ? this.memory.readUint64(address) + (size - 1) * Math.max(element.size, 1) : this.memory.readUint64(address));
+        case 'rend':
+          return pointerValue(element, this.memory.readUint64(address) - Math.max(element.size, 1));
         default:
           break;
       }
@@ -4341,7 +4402,14 @@ class Interpreter {
           return voidValue();
         case 'c_str':
         case 'data':
+        case 'begin':
           return pointerValue(charType(), this.memory.readUint64(address));
+        case 'end':
+          return pointerValue(charType(), this.memory.readUint64(address) + text.length);
+        case 'rbegin':
+          return pointerValue(charType(), text.length > 0 ? this.memory.readUint64(address) + text.length - 1 : this.memory.readUint64(address));
+        case 'rend':
+          return pointerValue(charType(), this.memory.readUint64(address) - 1);
         case 'push_back':
           this.stringAppend(address, String.fromCharCode(Math.trunc(toNumber(argumentAt(0))) & 0xff));
           return voidValue();
@@ -4400,7 +4468,14 @@ class Interpreter {
       'min', 'max', 'abs', 'swap', 'sort', 'reverse', 'distance',
       'to_string', 'stoi', 'stod', 'fabs',
       'lower_bound', 'upper_bound', 'binary_search', 'accumulate', 'iota',
-      'min_element', 'max_element', 'fill',
+      'min_element', 'max_element', 'minmax_element', 'fill',
+      'find', 'find_if', 'find_if_not',
+      'count', 'count_if',
+      'all_of', 'any_of', 'none_of',
+      'for_each', 'transform',
+      'partition', 'unique', 'copy',
+      'partial_sum', 'adjacent_difference', 'inner_product',
+      'gcd', 'lcm', 'back_inserter', 'make_pair',
     ]);
     if (!name.startsWith('std::') && !supported.has(base)) return undefined;
     if (!supported.has(base)) return undefined;
@@ -4547,9 +4622,411 @@ class Interpreter {
         }
         return voidValue();
       }
+      case 'find': {
+        const range = this.rangeOf(args, position);
+        const wanted = this.decay(argumentAt(2));
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (this.compareValues(current, wanted) === 0) {
+            return pointerValue(range.element, range.address + index * stride);
+          }
+        }
+        return pointerValue(range.element, range.address + range.count * stride);
+      }
+      case 'find_if': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (toBoolean(this.invokeCallable(predicate, [current], position))) {
+            return pointerValue(range.element, range.address + index * stride);
+          }
+        }
+        return pointerValue(range.element, range.address + range.count * stride);
+      }
+      case 'find_if_not': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (!toBoolean(this.invokeCallable(predicate, [current], position))) {
+            return pointerValue(range.element, range.address + index * stride);
+          }
+        }
+        return pointerValue(range.element, range.address + range.count * stride);
+      }
+      case 'count': {
+        const range = this.rangeOf(args, position);
+        const wanted = this.decay(argumentAt(2));
+        const stride = this.strideOf(range.element);
+        let count = 0;
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (this.compareValues(current, wanted) === 0) count += 1;
+        }
+        return intValue(longType(), count);
+      }
+      case 'count_if': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        let count = 0;
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (toBoolean(this.invokeCallable(predicate, [current], position))) count += 1;
+        }
+        return intValue(longType(), count);
+      }
+      case 'all_of': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (!toBoolean(this.invokeCallable(predicate, [current], position))) return intValue(intType(), 0);
+        }
+        return intValue(intType(), 1);
+      }
+      case 'any_of': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (toBoolean(this.invokeCallable(predicate, [current], position))) return intValue(intType(), 1);
+        }
+        return intValue(intType(), 0);
+      }
+      case 'none_of': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          if (toBoolean(this.invokeCallable(predicate, [current], position))) return intValue(intType(), 0);
+        }
+        return intValue(intType(), 1);
+      }
+      case 'for_each': {
+        const range = this.rangeOf(args, position);
+        const fn = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          this.invokeCallable(fn, [current], position);
+        }
+        return fn;
+      }
+      case 'transform': {
+        if (args.length >= 5) {
+          const range1 = this.rangeOf([args[0]!, args[1]!], position);
+          const first2 = this.decay(argumentAt(2));
+          const dest = argumentAt(3);
+          const op = argumentAt(4);
+          const first2Addr = toPointerAddress(first2) ?? 0;
+          const elem2 = first2.type.pointee ?? first2.type.element ?? range1.element;
+          const stride1 = this.strideOf(range1.element);
+          const stride2 = this.strideOf(elem2);
+          for (let index = 0; index < range1.count; index += 1) {
+            const in1 = this.load(range1.element, range1.address + index * stride1);
+            const in2 = this.load(elem2, first2Addr + index * stride2);
+            const res = this.invokeCallable(op, [in1, in2], position);
+            this.writeToDestination(dest, index, res, position);
+          }
+          return this.advanceDestination(dest, range1.count, range1.element);
+        }
+        const range = this.rangeOf([args[0]!, args[1]!], position);
+        const dest = argumentAt(2);
+        const op = argumentAt(3);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const input = this.load(range.element, range.address + index * stride);
+          const res = this.invokeCallable(op, [input], position);
+          this.writeToDestination(dest, index, res, position);
+        }
+        return this.advanceDestination(dest, range.count, range.element);
+      }
+      case 'minmax_element': {
+        const range = this.rangeOf(args, position);
+        const stride = this.strideOf(range.element);
+        let minIndex = 0;
+        let maxIndex = 0;
+        if (range.count > 0) {
+          for (let index = 1; index < range.count; index += 1) {
+            const current = this.load(range.element, range.address + index * stride);
+            const minVal = this.load(range.element, range.address + minIndex * stride);
+            const maxVal = this.load(range.element, range.address + maxIndex * stride);
+            if (this.compareValues(current, minVal) < 0) minIndex = index;
+            if (this.compareValues(current, maxVal) > 0) maxIndex = index;
+          }
+        }
+        const minPtr = pointerValue(range.element, range.address + minIndex * stride);
+        const maxPtr = pointerValue(range.element, range.address + maxIndex * stride);
+        const pairT = pairType(minPtr.type, maxPtr.type);
+        return this.createPair(pairT, minPtr, maxPtr);
+      }
+      case 'make_pair': {
+        const first = argumentAt(0);
+        const second = argumentAt(1);
+        const pairT = pairType(first.type, second.type);
+        return this.createPair(pairT, first, second);
+      }
+      case 'partition': {
+        const range = this.rangeOf(args, position);
+        const predicate = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        const temporary = this.builtinAlloc(stride);
+        let firstIndex = 0;
+        let lastIndex = range.count;
+
+        while (firstIndex < lastIndex) {
+          while (firstIndex < lastIndex) {
+            const current = this.load(range.element, range.address + firstIndex * stride);
+            if (!toBoolean(this.invokeCallable(predicate, [current], position))) break;
+            firstIndex += 1;
+          }
+          while (firstIndex < lastIndex) {
+            const current = this.load(range.element, range.address + (lastIndex - 1) * stride);
+            if (toBoolean(this.invokeCallable(predicate, [current], position))) break;
+            lastIndex -= 1;
+          }
+          if (firstIndex < lastIndex) {
+            lastIndex -= 1;
+            const leftAddr = range.address + firstIndex * stride;
+            const rightAddr = range.address + lastIndex * stride;
+            this.memory.copy(leftAddr, temporary, stride);
+            this.memory.copy(rightAddr, leftAddr, stride);
+            this.memory.copy(temporary, rightAddr, stride);
+            firstIndex += 1;
+          }
+        }
+        this.builtinFree(temporary);
+        return pointerValue(range.element, range.address + firstIndex * stride);
+      }
+      case 'unique': {
+        const range = this.rangeOf(args, position);
+        if (range.count <= 1) {
+          return pointerValue(range.element, range.address + range.count * this.strideOf(range.element));
+        }
+        const stride = this.strideOf(range.element);
+        let writeIndex = 1;
+        for (let readIndex = 1; readIndex < range.count; readIndex += 1) {
+          const current = this.load(range.element, range.address + readIndex * stride);
+          const previous = this.load(range.element, range.address + (writeIndex - 1) * stride);
+          if (this.compareValues(current, previous) !== 0) {
+            if (writeIndex !== readIndex) {
+              const src = range.address + readIndex * stride;
+              const dst = range.address + writeIndex * stride;
+              this.memory.copy(src, dst, stride);
+            }
+            writeIndex += 1;
+          }
+        }
+        return pointerValue(range.element, range.address + writeIndex * stride);
+      }
+      case 'copy': {
+        const range = this.rangeOf(args, position);
+        const dest = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          this.writeToDestination(dest, index, current, position);
+        }
+        return this.advanceDestination(dest, range.count, range.element);
+      }
+      case 'back_inserter': {
+        let target = args[0] ? this.lvalue(args[0]) : null;
+        if (!target && args[0]) {
+          const raw = this.evaluateRaw(args[0]);
+          if (raw.kind === 'aggregate') target = { address: raw.address, type: raw.type };
+        }
+        if (!target) throw new RuntimeFault('back_inserter needs a container', position);
+        return {
+          kind: 'pointer',
+          type: {
+            kind: 'pointer',
+            name: 'std::back_insert_iterator',
+            size: 8,
+            signed: false,
+            bits: 64,
+            pointee: target.type,
+          },
+          address: target.address,
+        };
+      }
+      case 'partial_sum': {
+        const range = this.rangeOf(args, position);
+        const dest = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        let sum = 0;
+        for (let index = 0; index < range.count; index += 1) {
+          const current = this.load(range.element, range.address + index * stride);
+          sum += toNumber(current);
+          const sumVal = isFloatType(range.element)
+            ? floatValue(range.element, sum)
+            : intValue(range.element, sum);
+          this.writeToDestination(dest, index, sumVal, position);
+        }
+        return this.advanceDestination(dest, range.count, range.element);
+      }
+      case 'adjacent_difference': {
+        const range = this.rangeOf(args, position);
+        const dest = argumentAt(2);
+        const stride = this.strideOf(range.element);
+        if (range.count > 0) {
+          let prev = this.load(range.element, range.address);
+          this.writeToDestination(dest, 0, prev, position);
+          for (let index = 1; index < range.count; index += 1) {
+            const current = this.load(range.element, range.address + index * stride);
+            const diff = toNumber(current) - toNumber(prev);
+            const diffVal = isFloatType(range.element)
+              ? floatValue(range.element, diff)
+              : intValue(range.element, diff);
+            this.writeToDestination(dest, index, diffVal, position);
+            prev = current;
+          }
+        }
+        return this.advanceDestination(dest, range.count, range.element);
+      }
+      case 'inner_product': {
+        const range1 = this.rangeOf([args[0]!, args[1]!], position);
+        const first2 = this.decay(argumentAt(2));
+        const init = this.decay(argumentAt(3));
+        const first2Addr = toPointerAddress(first2) ?? 0;
+        const elem2 = first2.type.pointee ?? first2.type.element ?? range1.element;
+        const stride1 = this.strideOf(range1.element);
+        const stride2 = this.strideOf(elem2);
+        let total = toNumber(init);
+        for (let index = 0; index < range1.count; index += 1) {
+          const v1 = toNumber(this.load(range1.element, range1.address + index * stride1));
+          const v2 = toNumber(this.load(elem2, first2Addr + index * stride2));
+          total += v1 * v2;
+        }
+        return isFloatType(init.type)
+          ? floatValue(init.type, total)
+          : intValue(init.type, total);
+      }
+      case 'gcd': {
+        let a = Math.abs(Math.trunc(toNumber(argumentAt(0))));
+        let b = Math.abs(Math.trunc(toNumber(argumentAt(1))));
+        while (b !== 0) {
+          const t = b;
+          b = a % b;
+          a = t;
+        }
+        return intValue(intType(), a);
+      }
+      case 'lcm': {
+        const rawA = Math.abs(Math.trunc(toNumber(argumentAt(0))));
+        const rawB = Math.abs(Math.trunc(toNumber(argumentAt(1))));
+        if (rawA === 0 || rawB === 0) return intValue(intType(), 0);
+        let a = rawA;
+        let b = rawB;
+        while (b !== 0) {
+          const t = b;
+          b = a % b;
+          a = t;
+        }
+        const lcmVal = Math.trunc((rawA / a) * rawB);
+        return intValue(intType(), lcmVal);
+      }
       default:
         return undefined;
     }
+  }
+
+  /**
+   * @brief Invokes a callable target such as a lambda closure, function pointer, or functor object.
+   * @details Dispatches invocation according to the callable kind: inspecting closure tables for lambdas,
+   * definition tables for free function pointers, and checking for struct operator() overloads on aggregate instances.
+   * @param callable The Value representing the callable target.
+   * @param args Arguments to pass to the callable.
+   * @param position Source position of the call site for fault reporting.
+   * @return The Value produced by the callable execution.
+   */
+  private invokeCallable(
+    callable: Value,
+    args: readonly Value[],
+    _position: SourcePos,
+  ): Value {
+    const address = toPointerAddress(callable);
+    if (address !== null) {
+      const closure = this.closures.get(address);
+      if (closure) {
+        return this.callClosure(closure, args);
+      }
+      const name = this.functionTable[address];
+      if (name) {
+        const decl = this.definitions.get(name);
+        if (decl) return this.callFunction(decl, args);
+      }
+    }
+
+    const typeName = callable.type.name ? bareTagName(callable.type.name) : undefined;
+    if (typeName) {
+      const opName = `${typeName}::operator()`;
+      const decl = this.definitions.get(opName);
+      if (decl) {
+        const thisAddr = callable.kind === 'aggregate' || callable.kind === 'pointer' ? callable.address : undefined;
+        return this.callFunction(decl, args, thisAddr, callable.type);
+      }
+    }
+
+    if (callable.kind === 'aggregate') {
+      const decl = this.definitions.get('operator()');
+      if (decl) return this.callFunction(decl, args, callable.address, callable.type);
+    }
+
+    return this.callFunctionPointer(callable, args);
+  }
+
+  /**
+   * @brief Writes a computed value to an output iterator or container inserter destination.
+   * @details If the destination is a back_insert_iterator, pushes the value to the underlying vector container;
+   * otherwise stores the value through pointer offset in memory.
+   * @param dest The destination iterator or back_insert_iterator Value.
+   * @param index The zero-based offset relative to destination start.
+   * @param value The Value to write.
+   * @param position Source position for fault reporting.
+   */
+  private writeToDestination(
+    dest: Value,
+    index: number,
+    value: Value,
+    position: SourcePos,
+  ): void {
+    if (dest.type.name === 'std::back_insert_iterator' && dest.kind === 'pointer') {
+      this.vectorPush(dest.address, dest.type.pointee ?? dest.type, value);
+      return;
+    }
+    const destAddr = toPointerAddress(dest);
+    if (destAddr === null) {
+      throw new RuntimeFault('destination must be an iterator or container inserter', position);
+    }
+    const destElement = dest.type.pointee ?? dest.type.element ?? value.type;
+    const stride = this.strideOf(destElement);
+    this.store(destElement, destAddr + index * stride, convertTo(destElement, value));
+  }
+
+  /**
+   * @brief Advances an output destination iterator by a specified element count.
+   * @param dest The destination iterator Value.
+   * @param count Number of elements written to advance the iterator.
+   * @param element The element type determining stride.
+   * @return Advanced iterator pointer Value or the inserter itself.
+   */
+  private advanceDestination(dest: Value, count: number, element: CType): Value {
+    if (dest.type.name === 'std::back_insert_iterator') {
+      return dest;
+    }
+    const destAddr = toPointerAddress(dest);
+    if (destAddr === null) return dest;
+    const destElement = dest.type.pointee ?? dest.type.element ?? element;
+    const stride = this.strideOf(destElement);
+    return pointerValue(destElement, destAddr + count * stride);
   }
 
   private strideOf(element: CType): number {

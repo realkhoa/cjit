@@ -88,8 +88,8 @@ function addressArg(args: readonly Value[], index: number): number {
 /** Turns a two-argument numeric function into a builtin call. */
 const binaryDouble =
   (fn: (a: number, b: number) => number) =>
-  (args: readonly Value[]): number =>
-    fn(numberArg(args, 0), numberArg(args, 1));
+  (args: readonly Value[], ctx: SimpleBuiltinContext): Value =>
+    doubleResult(ctx, fn(numberArg(args, 0), numberArg(args, 1)));
 
 const SIMPLE: Record<string, SimpleBuiltin> = {
   // ---------------------------------------------------------------- stdio
@@ -328,20 +328,20 @@ const SIMPLE: Record<string, SimpleBuiltin> = {
 
   // ---------------------------------------------------------------- math
   sqrt: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.sqrt(numberArg(args, 0))) },
-  pow: { returns: 'double', call: binaryDouble((a, b) => a ** b) as never },
+  pow: { returns: 'double', call: binaryDouble((a, b) => a ** b) },
   fabs: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.abs(numberArg(args, 0))) },
   floor: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.floor(numberArg(args, 0))) },
   ceil: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.ceil(numberArg(args, 0))) },
   round: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.round(numberArg(args, 0))) },
-  fmod: { returns: 'double', call: binaryDouble((a, b) => (b === 0 ? Number.NaN : a % b)) as never },
+  fmod: { returns: 'double', call: binaryDouble((a, b) => (b === 0 ? Number.NaN : a % b)) },
   exp: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.exp(numberArg(args, 0))) },
   log: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.log(numberArg(args, 0))) },
   log10: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.log10(numberArg(args, 0))) },
   sin: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.sin(numberArg(args, 0))) },
   cos: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.cos(numberArg(args, 0))) },
   tan: { returns: 'double', call: (args, ctx) => doubleResult(ctx, Math.tan(numberArg(args, 0))) },
-  atan2: { returns: 'double', call: binaryDouble((a, b) => Math.atan2(a, b)) as never },
-  hypot: { returns: 'double', call: binaryDouble((a, b) => Math.hypot(a, b)) as never },
+  atan2: { returns: 'double', call: binaryDouble((a, b) => Math.atan2(a, b)) },
+  hypot: { returns: 'double', call: binaryDouble((a, b) => Math.hypot(a, b)) },
   isnan: {
     returns: 'int',
     call: (args, ctx) => intResult(ctx, Number.isNaN(numberArg(args, 0)) ? 1 : 0),

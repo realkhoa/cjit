@@ -566,14 +566,40 @@ int main() {
 `;
     const analysis = analyzeSource(code, 'main.cpp');
     const exec = execute(analysis.unit);
-    console.log('Execution result demoContainers:', {
-      status: exec.status,
-      detail: (exec as any).detail,
-      diagnostics: exec.diagnostics,
-      stdout: (exec as any).output ?? (exec as any).stdout,
-    });
     expect(exec.status).toBe('ok');
     expect(exec.diagnostics).toHaveLength(0);
+  });
+
+  it('runs demoAlgorithms through the fast interpreter without faulting', () => {
+    const demoAlgorithmsSrc = USER_CODE.slice(
+      USER_CODE.indexOf('void demoAlgorithms()'),
+      USER_CODE.indexOf('void demoStrings()'),
+    );
+    const code = `using namespace std;
+struct IsEven {
+    bool operator()(int n) const {
+        return n % 2 == 0;
+    }
+};
+${demoAlgorithmsSrc}
+int main() {
+    demoAlgorithms();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Found: 4');
+    expect(exec.stdout).toContain('Even count: 4');
+    expect(exec.stdout).toContain('Sum: 23');
+    expect(exec.stdout).toContain('Min: 1, Max: 6');
+    expect(exec.stdout).toContain('Even partition size: 4');
+    expect(exec.stdout).toContain('Last in reverse order: 1');
+    expect(exec.stdout).toContain('Inner product: 95');
+    expect(exec.stdout).toContain('GCD: 6');
+    expect(exec.stdout).toContain('LCM: 12');
+    expect(exec.stdout).toContain('Power: 8');
   });
 
   it('executes std::tuple and structured bindings correctly', () => {

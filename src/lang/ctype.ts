@@ -496,7 +496,12 @@ export function isStringType(type: CType): boolean {
  * @return True if the type represents a stringstream or ostringstream, false otherwise.
  */
 export function isStreamBuffer(type: CType): boolean {
-  return type.name === 'std::ostringstream' || type.name === 'std::stringstream';
+  return (
+    type.name === 'std::ostringstream' ||
+    type.name === 'std::stringstream' ||
+    type.name === 'ostringstream' ||
+    type.name === 'stringstream'
+  );
 }
 
 /** Encodes an element type for the vector's runtime descriptor. */
@@ -983,12 +988,22 @@ export class TypeResolver {
     // A string stream is the same buffer as a string, under another name.
     if (
       name === 'std::ostringstream' ||
+      name === 'ostringstream' ||
       name === 'std::stringstream' ||
-      name === 'std::istringstream'
+      name === 'stringstream' ||
+      name === 'std::istringstream' ||
+      name === 'istringstream'
     ) {
       return { ...stringType(), name };
     }
-    if (name === 'std::ostream' || name === 'std::istream' || name === 'std::iostream') {
+    if (
+      name === 'std::ostream' ||
+      name === 'ostream' ||
+      name === 'std::istream' ||
+      name === 'istream' ||
+      name === 'std::iostream' ||
+      name === 'iostream'
+    ) {
       return { kind: 'unknown', name, size: 1, signed: false, bits: 8 };
     }
 
