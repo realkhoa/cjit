@@ -655,8 +655,8 @@ int main() {
     expect(exec.stdout).toContain('Age=25, Score=95.5');
     expect(exec.stdout).toContain('Number: 20');
     expect(exec.stdout).toContain('Number: 2026');
-    expect(exec.stdout).toContain('Starts with Modern: true');
-    expect(exec.stdout).toContain('Ends with STL: true');
+    expect(exec.stdout).toContain('Starts with Modern: 1');
+    expect(exec.stdout).toContain('Ends with STL: 1');
   });
 
   it('runs demoContainers, demoAlgorithms, and demoStrings together without error', () => {
@@ -740,7 +740,7 @@ int main() {
     expect(exec.status).toBe('ok');
     expect(exec.stdout).toContain('Vector size: 6');
     expect(exec.stdout).toContain('Even count: 4');
-    expect(exec.stdout).toContain('Starts with Modern: true');
+    expect(exec.stdout).toContain('Starts with Modern: 1');
     expect(exec.stdout).toContain('Optional: 42');
     expect(exec.stdout).toContain('Reference wrapper: 20');
   });
@@ -801,7 +801,7 @@ int main() {
     expect(exec.status).toBe('ok');
     expect(exec.stdout).toContain('Vector size: 6');
     expect(exec.stdout).toContain('Even count: 4');
-    expect(exec.stdout).toContain('Starts with Modern: true');
+    expect(exec.stdout).toContain('Starts with Modern: 1');
     expect(exec.stdout).toContain('Optional: 42');
     expect(exec.stdout).toContain('Reference wrapper: 20');
     expect(exec.stdout).toContain('Unique: Alice');
@@ -809,4 +809,39 @@ int main() {
     expect(exec.stdout).toContain('Weak lock: Bob');
     expect(exec.stdout).toContain('Shared count after reset: 1');
   });
+
+  it('executes the COMPLETE 475-line user STL demo suite from start to finish', () => {
+    const analysis = analyzeSource(USER_CODE, 'main.cpp');
+    expect(analysis.errorCount).toBe(0);
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('FULL DEMO STATUS:', exec.status);
+      console.log('FULL DEMO DETAIL:', exec.detail);
+      console.log('FULL DEMO DIAGNOSTICS:', exec.diagnostics);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('===== STL CONTAINERS =====');
+    expect(exec.stdout).toContain('Vector size: 6');
+    expect(exec.stdout).toContain('===== ALGORITHMS =====');
+    expect(exec.stdout).toContain('Even count: 4');
+    expect(exec.stdout).toContain('===== STRINGS =====');
+    expect(exec.stdout).toContain('Starts with Modern: 1');
+    expect(exec.stdout).toContain('===== UTILITIES =====');
+    expect(exec.stdout).toContain('Optional: 42');
+    expect(exec.stdout).toContain('===== SMART POINTERS =====');
+    expect(exec.stdout).toContain('Unique: Alice');
+    expect(exec.stdout).toContain('===== SYSTEM UTILITIES =====');
+    expect(exec.stdout).toContain('Random: ');
+    expect(exec.stdout).toContain('File content: Hello from STL fstream in WebAssembly');
+    expect(exec.stdout).toContain('===== RANGES (C++17) =====');
+    expect(exec.stdout).toContain('Even squares: 4 16 36 64 100');
+    expect(exec.stdout).toContain('All positive: 1');
+    expect(exec.stdout).toContain('===== TYPE TRAITS =====');
+    expect(exec.stdout).toContain('int is integral: true');
+    expect(exec.stdout).toContain('double is floating: true');
+    expect(exec.stdout).toContain('===== CONSTRAINED FUNCTION (C++17 SFINAE) =====');
+    expect(exec.stdout).toContain('Add: 30');
+    expect(exec.stdout).toContain('All demos completed.');
+  });
 });
+

@@ -158,6 +158,23 @@ export function isPointerType(type: CType): boolean {
   return type.kind === 'pointer';
 }
 
+/**
+ * @brief Checks if two CTypes represent the exact same type representation.
+ * @param a First CType to compare.
+ * @param b Second CType to compare.
+ * @return True if both types are identical, false otherwise.
+ */
+export function isSameType(a: CType, b: CType): boolean {
+  if (a === b) return true;
+  if (a.name === b.name) return true;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'pointer' && b.kind === 'pointer') {
+    if (!a.pointee || !b.pointee) return a.pointee === b.pointee;
+    return isSameType(a.pointee, b.pointee);
+  }
+  return a.size === b.size && a.signed === b.signed;
+}
+
 export function isAggregateType(type: CType): boolean {
   return type.kind === 'struct' || type.kind === 'union' || type.kind === 'array';
 }
@@ -630,6 +647,160 @@ export function isWeakPtrType(type: CType): boolean {
  */
 export function isSmartPointerType(type: CType): boolean {
   return isUniquePtrType(type) || isSharedPtrType(type) || isWeakPtrType(type);
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::mt19937 random number generator.
+ * @return A CType representing std::mt19937.
+ */
+export function mt19937Type(): CType {
+  return {
+    kind: 'struct',
+    name: 'std::mt19937',
+    size: 16,
+    signed: false,
+    bits: 128,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::mt19937 random number generator.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents mt19937, false otherwise.
+ */
+export function isMt19937Type(type: CType): boolean {
+  return type.kind === 'struct' && (type.name === 'std::mt19937' || type.name === 'mt19937');
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::uniform_int_distribution<T>.
+ * @param element Contained numeric type.
+ * @return A CType representing std::uniform_int_distribution<T>.
+ */
+export function uniformIntDistributionType(element: CType): CType {
+  return {
+    kind: 'struct',
+    name: `std::uniform_int_distribution<${element.name}>`,
+    size: 16,
+    signed: false,
+    bits: 128,
+    element,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::uniform_int_distribution.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents uniform_int_distribution, false otherwise.
+ */
+export function isUniformIntDistributionType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name.startsWith('std::uniform_int_distribution') ||
+      type.name.startsWith('uniform_int_distribution'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::chrono time_point.
+ * @return A CType representing std::chrono::time_point.
+ */
+export function timePointType(): CType {
+  return {
+    kind: 'struct',
+    name: 'std::chrono::time_point',
+    size: 16,
+    signed: false,
+    bits: 128,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::chrono time_point.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents a time_point, false otherwise.
+ */
+export function isTimePointType(type: CType): boolean {
+  return type.kind === 'struct' && type.name.startsWith('std::chrono::time_point');
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::chrono duration.
+ * @param unit The duration unit name.
+ * @return A CType representing std::chrono::duration.
+ */
+export function durationType(unit: string = 'microseconds'): CType {
+  return {
+    kind: 'struct',
+    name: `std::chrono::duration<${unit}>`,
+    size: 8,
+    signed: true,
+    bits: 64,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::chrono duration.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents a duration, false otherwise.
+ */
+export function isDurationType(type: CType): boolean {
+  return type.kind === 'struct' && type.name.startsWith('std::chrono::duration');
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::ofstream.
+ * @return A CType representing std::ofstream.
+ */
+export function ofstreamType(): CType {
+  return {
+    kind: 'struct',
+    name: 'std::ofstream',
+    size: 16,
+    signed: false,
+    bits: 128,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::ofstream.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents ofstream, false otherwise.
+ */
+export function isOfstreamType(type: CType): boolean {
+  return type.kind === 'struct' && (type.name === 'std::ofstream' || type.name === 'ofstream');
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::ifstream.
+ * @return A CType representing std::ifstream.
+ */
+export function ifstreamType(): CType {
+  return {
+    kind: 'struct',
+    name: 'std::ifstream',
+    size: 16,
+    signed: false,
+    bits: 128,
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::ifstream.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents ifstream, false otherwise.
+ */
+export function isIfstreamType(type: CType): boolean {
+  return type.kind === 'struct' && (type.name === 'std::ifstream' || type.name === 'ifstream');
+}
+
+/**
+ * @brief Checks if a CType represents any file stream (ofstream, ifstream).
+ * @param type The type descriptor to inspect.
+ * @return True if the type is a file stream, false otherwise.
+ */
+export function isFileStreamType(type: CType): boolean {
+  return isOfstreamType(type) || isIfstreamType(type);
 }
 
 function containerType(name: string, element: CType, displayName?: string): CType {
@@ -1114,6 +1285,7 @@ export class TypeResolver {
 
     const name = stripQualifiers(rawName);
     if (name.length === 0) return SCALAR_BY_NAME.get('int') ?? UNKNOWN_TYPE;
+    if (name === 'void') return VOID_TYPE;
 
     if (name.startsWith('struct ') || name.startsWith('union ') || name.startsWith('enum ')) {
       const found = this.tags.get(name) ?? this.enums.get(name);
@@ -1123,6 +1295,17 @@ export class TypeResolver {
       if (byBare) return byBare;
       // A tag that is only ever used as a pointer is fine as an opaque type.
       return { kind: 'unknown', name, size: 1, signed: false, bits: 8 };
+    }
+
+    if (name.endsWith('*')) {
+      const innerName = name.slice(0, -1).trim();
+      const pointee = this.resolveByName(innerName, depth + 1);
+      return pointerTo(pointee);
+    }
+    if (name.endsWith('&')) {
+      const innerName = name.slice(0, -1).trim();
+      const pointee = this.resolveByName(innerName, depth + 1);
+      return { ...pointerTo(pointee), name: `${pointee.name} &` };
     }
 
     const direct = SCALAR_BY_NAME.get(name);
@@ -1162,6 +1345,11 @@ export class TypeResolver {
         isAnyType(resolved) ||
         isReferenceWrapperType(resolved) ||
         isSmartPointerType(resolved) ||
+        isMt19937Type(resolved) ||
+        isUniformIntDistributionType(resolved) ||
+        isTimePointType(resolved) ||
+        isDurationType(resolved) ||
+        isFileStreamType(resolved) ||
         containerKindOf(resolved) !== null ||
         resolved.kind === 'array' ||
         resolved.kind === 'pointer';
@@ -1348,6 +1536,34 @@ export class TypeResolver {
     ) {
       return { kind: 'unknown', name, size: 1, signed: false, bits: 8 };
     }
+
+    if (name === 'std::mt19937' || name === 'mt19937') return mt19937Type();
+    const distMatch = /^(?:std::)?uniform_int_distribution\s*(?:<(.+)>)?$/.exec(name);
+    if (distMatch) {
+      const elem = this.resolveByName((distMatch[1] ?? 'int').trim(), depth + 1);
+      return uniformIntDistributionType(elem);
+    }
+
+    if (name === 'std::chrono::time_point' || name.startsWith('std::chrono::time_point')) return timePointType();
+    const durationMatch = /^(?:std::)?(?:chrono::)?duration\s*(?:<(.+)>)?$/.exec(name);
+    if (durationMatch) {
+      return durationType((durationMatch[1] ?? 'microseconds').trim());
+    }
+    if (name === 'std::chrono::microseconds' || name === 'chrono::microseconds' || name === 'microseconds') {
+      return durationType('microseconds');
+    }
+    if (name === 'std::chrono::milliseconds' || name === 'chrono::milliseconds' || name === 'milliseconds') {
+      return durationType('milliseconds');
+    }
+    if (name === 'std::chrono::nanoseconds' || name === 'chrono::nanoseconds' || name === 'nanoseconds') {
+      return durationType('nanoseconds');
+    }
+    if (name === 'std::chrono::seconds' || name === 'chrono::seconds' || name === 'seconds') {
+      return durationType('seconds');
+    }
+
+    if (name === 'std::ofstream' || name === 'ofstream') return ofstreamType();
+    if (name === 'std::ifstream' || name === 'ifstream') return ifstreamType();
 
     // Opaque handles the standard library exposes without a definition.
     if (name === 'FILE' || name === 'va_list' || name === 'struct _IO_FILE') {

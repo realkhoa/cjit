@@ -39,11 +39,20 @@ import {
   isSharedPtrType,
   isWeakPtrType,
   isSmartPointerType,
+  isSameType,
   isRegexIteratorType,
   isRegexType,
   isStreamBuffer,
   isStringType,
   isVectorType,
+  isMt19937Type,
+  isUniformIntDistributionType,
+  isTimePointType,
+  isDurationType,
+  isOfstreamType,
+  isIfstreamType,
+  timePointType,
+  durationType,
   pairParts,
   pointerTo,
 } from '@/lang/ctype';
@@ -461,10 +470,71 @@ export function execute(
   return new Interpreter(unit, options).run();
 }
 
+/**
+ * @brief 32-bit Mersenne Twister pseudo-random number generator (MT19937).
+ */
+class MT19937 {
+  private readonly mt = new Uint32Array(624);
+  private index = 624;
+
+  /**
+   * @brief Constructs and seeds the Mersenne Twister engine.
+   * @param seed Initial seed value (defaults to 5489).
+   */
+  constructor(seed: number = 5489) {
+    this.seed(seed);
+  }
+
+  /**
+   * @brief Seeds the engine with a given integer seed.
+   * @param s Seed value.
+   */
+  public seed(s: number): void {
+    this.mt[0] = s >>> 0;
+    for (let i = 1; i < 624; i++) {
+      const prev = this.mt[i - 1]!;
+      const val = Math.imul(1812433253, prev ^ (prev >>> 30)) + i;
+      this.mt[i] = val >>> 0;
+    }
+    this.index = 624;
+  }
+
+  /**
+   * @brief Generates the next 32-bit pseudo-random unsigned integer.
+   * @return A 32-bit pseudo-random unsigned number.
+   */
+  public next(): number {
+    if (this.index >= 624) {
+      this.twist();
+    }
+    let y = this.mt[this.index++]!;
+    y ^= (y >>> 11);
+    y ^= (y << 7) & 0x9D2C5680;
+    y ^= (y << 15) & 0xEFC60000;
+    y ^= (y >>> 18);
+    return y >>> 0;
+  }
+
+  private twist(): void {
+    for (let i = 0; i < 624; i++) {
+      const y = ((this.mt[i]! & 0x80000000) >>> 0) + ((this.mt[(i + 1) % 624]! & 0x7FFFFFFF) >>> 0);
+      const nextY = (y >>> 1) ^ (y & 1 ? 0x9908B0DF : 0);
+      this.mt[i] = (this.mt[(i + 397) % 624]! ^ nextY) >>> 0;
+    }
+    this.index = 0;
+  }
+}
+
 class Interpreter {
   private readonly memory = new Memory();
   private readonly resolver: TypeResolver;
   private readonly diagnostics: Diagnostic[] = [];
+  private readonly randomEngines = new Map<number, MT19937>();
+  private readonly randomDistributions = new Map<number, { min: number; max: number }>();
+  private readonly chronoTimePoints = new Map<number, number>();
+  private readonly chronoDurations = new Map<number, number>();
+  private readonly virtualFiles = new Map<string, string>();
+  private readonly fileStreams = new Map<number, { filename: string; mode: 'in' | 'out'; open: boolean; cursor: number }>();
   private readonly functions = new Map<string, FunctionDeclNode>();
   /** Only functions that actually have a body: library prototypes must not shadow builtins. */
   private readonly definitions = new Map<string, FunctionDeclNode>();
@@ -491,6 +561,8 @@ class Interpreter {
   private readonly slotTypes = new Map<number, CType>();
   /** Set by `using namespace std;`, which the parser records as a declaration. */
   private stdNamespaceImported = false;
+  /** Whether boolalpha stream formatting is enabled for std::cout / streams. */
+  private boolalphaEnabled = false;
   /** Bare names from `using std::cout;` and friends. */
   private readonly importedNames = new Set<string>();
   /** Namespaces brought in with `using namespace X;`, applied once everything exists. */
@@ -1213,6 +1285,24 @@ class Interpreter {
       this.uninitialized.delete(address);
       this.memory.fill(address, 0, Math.max(type.size, 1));
       this.record(binding, declaration.start);
+    } else if (isMt19937Type(type)) {
+      this.uninitialized.delete(address);
+      this.randomEngines.set(address, new MT19937(5489));
+      this.record(binding, declaration.start);
+    } else if (isUniformIntDistributionType(type)) {
+      this.uninitialized.delete(address);
+      this.randomDistributions.set(address, { min: 0, max: 2147483647 });
+      this.record(binding, declaration.start);
+    } else if (isOfstreamType(type)) {
+      this.uninitialized.delete(address);
+      this.fileStreams.set(address, { filename: 'out.txt', mode: 'out', open: false, cursor: 0 });
+      this.memory.writeUint8(address, 0);
+      this.record(binding, declaration.start);
+    } else if (isIfstreamType(type)) {
+      this.uninitialized.delete(address);
+      this.fileStreams.set(address, { filename: 'in.txt', mode: 'in', open: false, cursor: 0 });
+      this.memory.writeUint8(address, 0);
+      this.record(binding, declaration.start);
     }
 
     if (declaration.structuredBindings) {
@@ -1279,6 +1369,53 @@ class Interpreter {
         }
       }
       this.store(binding.type, binding.address, evaluated);
+      return;
+    }
+
+    if (isMt19937Type(binding.type)) {
+      let seed = 5489;
+      if (initializer.kind === 'init-list') {
+        if (initializer.items[0]) seed = Math.trunc(toNumber(this.evaluate(initializer.items[0])));
+      } else {
+        seed = Math.trunc(toNumber(this.evaluate(initializer)));
+      }
+      this.randomEngines.set(binding.address, new MT19937(seed));
+      return;
+    }
+
+    if (isUniformIntDistributionType(binding.type)) {
+      let min = 0;
+      let max = 2147483647;
+      if (initializer.kind === 'init-list') {
+        if (initializer.items[0]) min = Math.trunc(toNumber(this.evaluate(initializer.items[0])));
+        if (initializer.items[1]) max = Math.trunc(toNumber(this.evaluate(initializer.items[1])));
+      }
+      this.randomDistributions.set(binding.address, { min, max });
+      return;
+    }
+
+    if (isOfstreamType(binding.type)) {
+      let filename = 'out.txt';
+      if (initializer.kind === 'init-list') {
+        if (initializer.items[0]) filename = this.readStringValue(this.evaluate(initializer.items[0]));
+      } else {
+        filename = this.readStringValue(this.evaluate(initializer));
+      }
+      this.fileStreams.set(binding.address, { filename, mode: 'out', open: true, cursor: 0 });
+      this.memory.writeUint8(binding.address, 1);
+      return;
+    }
+
+    if (isIfstreamType(binding.type)) {
+      let filename = 'in.txt';
+      if (initializer.kind === 'init-list') {
+        if (initializer.items[0]) filename = this.readStringValue(this.evaluate(initializer.items[0]));
+      } else {
+        filename = this.readStringValue(this.evaluate(initializer));
+      }
+      const exists = this.virtualFiles.has(filename);
+      this.fileStreams.set(binding.address, { filename, mode: 'in', open: exists, cursor: 0 });
+      this.memory.writeUint8(binding.address, exists ? 1 : 0);
       return;
     }
 
@@ -1489,6 +1626,12 @@ class Interpreter {
       if (isSmartPointerType(value.type)) {
         return this.memory.readUint64(value.address) !== 0;
       }
+      if (isOfstreamType(value.type) || isIfstreamType(value.type)) {
+        return (this.fileStreams.get(value.address)?.open ?? false);
+      }
+    }
+    if (value.kind === 'pointer' && value.type.pointee && (isOfstreamType(value.type.pointee) || isIfstreamType(value.type.pointee))) {
+      return (this.fileStreams.get(value.address)?.open ?? false);
     }
     return toBoolean(value);
   }
@@ -1904,7 +2047,7 @@ class Interpreter {
       case 'delete':
         return this.evaluateDelete(expression);
       case 'identifier':
-        return this.loadIdentifier(expression.name, expression.start);
+        return this.loadIdentifier(expression.name, expression.start, expression.templateArg);
       case 'binary':
         return this.evaluateBinary(expression);
       case 'unary':
@@ -2018,11 +2161,41 @@ class Interpreter {
     return intValue(type, value);
   }
 
-  private loadIdentifier(name: string, position: SourcePos): Value {
+  private loadIdentifier(name: string, position: SourcePos, templateArg?: string): Value {
     // Streams and stream manipulators are values, not variables.
     if (name === 'std::cout') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream' } };
     if (name === 'std::cerr') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::ostream:cerr' } };
     if (name === 'std::endl') return { kind: 'void', type: { ...VOID_TYPE, name: 'std::endl' } };
+    if (name === 'std::boolalpha' || (name === 'boolalpha' && this.hasBareName('boolalpha'))) {
+      return { kind: 'void', type: { ...VOID_TYPE, name: 'std::boolalpha' } };
+    }
+    if (name === 'std::noboolalpha' || (name === 'noboolalpha' && this.hasBareName('noboolalpha'))) {
+      return { kind: 'void', type: { ...VOID_TYPE, name: 'std::noboolalpha' } };
+    }
+
+    const traitMatch = /^(?:std::)?(is_[a-z_]+_v)$/.exec(name);
+    if (traitMatch && templateArg !== undefined) {
+      const trait = traitMatch[1];
+      const boolType: CType = { kind: 'bool', name: 'bool', size: 1, signed: false, bits: 8 };
+      let res = false;
+      if (trait === 'is_same_v') {
+        const parts = templateArg.split(',').map((s) => s.trim());
+        const t1 = this.resolver.resolveByName(parts[0] ?? 'void');
+        const t2 = this.resolver.resolveByName(parts[1] ?? 'void');
+        res = isSameType(t1, t2);
+      } else {
+        const t = this.resolver.resolveByName(templateArg.trim());
+        if (trait === 'is_integral_v') res = isIntegerType(t);
+        else if (trait === 'is_floating_point_v') res = isFloatType(t);
+        else if (trait === 'is_arithmetic_v') res = isNumericType(t);
+        else if (trait === 'is_pointer_v') res = isPointerType(t);
+        else if (trait === 'is_void_v') res = t.kind === 'void';
+        else if (trait === 'is_array_v') res = t.kind === 'array';
+        else if (trait === 'is_signed_v') res = isNumericType(t) && !!t.signed;
+        else if (trait === 'is_unsigned_v') res = isNumericType(t) && !t.signed;
+      }
+      return { kind: 'int', type: boolType, value: res ? 1 : 0 };
+    }
 
     /*
      * The bare spellings, once `using namespace std;` or `using std::cout;` has said
@@ -2114,6 +2287,15 @@ class Interpreter {
             ? { kind: 'void' as const, type: { ...VOID_TYPE, name: 'std::ostream:cerr' } }
             : { kind: 'void' as const, type: { ...VOID_TYPE, name: 'std::ostream' } };
 
+        if (right.type.name === 'std::boolalpha') {
+          this.boolalphaEnabled = true;
+          return streamValue;
+        }
+        if (right.type.name === 'std::noboolalpha') {
+          this.boolalphaEnabled = false;
+          return streamValue;
+        }
+
         /*
          * A class that defines its own `operator<<` decides what it looks like when
          * printed: `std::cout << point` calls `operator<<(std::ostream&, const Point&)`.
@@ -2136,6 +2318,12 @@ class Interpreter {
         if (target.kind === 'buffer') {
           // `out << "n=" << 12` builds the text in the stream's own buffer.
           this.stringAppend(target.binding.address, text);
+        } else if (target.kind === 'file') {
+          const fs = this.fileStreams.get(target.address);
+          if (fs && fs.open) {
+            const current = this.virtualFiles.get(fs.filename) ?? '';
+            this.virtualFiles.set(fs.filename, current + text);
+          }
         } else {
           this.appendOutput(text, target.kind === 'stderr');
         }
@@ -2178,6 +2366,18 @@ class Interpreter {
 
     switch (operator) {
       case '+':
+        if (isDurationType(left.type) && isDurationType(right.type)) {
+          const leftAddr = left.kind === 'aggregate' ? left.address : 0;
+          const rightAddr = right.kind === 'aggregate' ? right.address : 0;
+          const leftVal = this.chronoDurations.get(leftAddr) ?? (leftAddr ? this.memory.readInt64(leftAddr) : 0);
+          const rightVal = this.chronoDurations.get(rightAddr) ?? (rightAddr ? this.memory.readInt64(rightAddr) : 0);
+          const sum = leftVal + rightVal;
+          const durType = left.type;
+          const durAddr = this.allocateFor(durType);
+          this.chronoDurations.set(durAddr, sum);
+          this.memory.writeInt64(durAddr, sum);
+          return { kind: 'aggregate', type: durType, address: durAddr };
+        }
         if (pointerish && !isPointerType(right.type)) {
           return this.shiftPointer(left, toNumber(right), expression);
         }
@@ -2186,6 +2386,30 @@ class Interpreter {
         }
         return this.arithmetic(left, right, (a, b) => a + b);
       case '-':
+        if (isTimePointType(left.type) && isTimePointType(right.type)) {
+          const leftAddr = left.kind === 'aggregate' ? left.address : 0;
+          const rightAddr = right.kind === 'aggregate' ? right.address : 0;
+          const leftTime = this.chronoTimePoints.get(leftAddr) ?? (leftAddr ? this.memory.readInt64(leftAddr) : 0);
+          const rightTime = this.chronoTimePoints.get(rightAddr) ?? (rightAddr ? this.memory.readInt64(rightAddr) : 0);
+          const diff = leftTime - rightTime;
+          const durType = durationType('microseconds');
+          const durAddr = this.allocateFor(durType);
+          this.chronoDurations.set(durAddr, diff);
+          this.memory.writeInt64(durAddr, diff);
+          return { kind: 'aggregate', type: durType, address: durAddr };
+        }
+        if (isDurationType(left.type) && isDurationType(right.type)) {
+          const leftAddr = left.kind === 'aggregate' ? left.address : 0;
+          const rightAddr = right.kind === 'aggregate' ? right.address : 0;
+          const leftVal = this.chronoDurations.get(leftAddr) ?? (leftAddr ? this.memory.readInt64(leftAddr) : 0);
+          const rightVal = this.chronoDurations.get(rightAddr) ?? (rightAddr ? this.memory.readInt64(rightAddr) : 0);
+          const diff = leftVal - rightVal;
+          const durType = left.type;
+          const durAddr = this.allocateFor(durType);
+          this.chronoDurations.set(durAddr, diff);
+          this.memory.writeInt64(durAddr, diff);
+          return { kind: 'aggregate', type: durType, address: durAddr };
+        }
         if (pointerish) {
           if (isPointerType(right.type)) {
             const elementSize = Math.max(
@@ -3100,6 +3324,34 @@ class Interpreter {
         const thisAddr = value.kind === 'aggregate' || value.kind === 'pointer' ? value.address : undefined;
         return this.callFunction(target, this.callArguments(expression.args, target), thisAddr, value.type);
       }
+    }
+
+    // Calling a random distribution: `distribution(rng)`
+    if (isUniformIntDistributionType(value.type)) {
+      const valAddr = value.kind === 'aggregate' || value.kind === 'pointer' ? value.address : 0;
+      const dist = this.randomDistributions.get(valAddr) ?? { min: 0, max: 2147483647 };
+      let rngEngine: MT19937 | undefined;
+      if (expression.args.length > 0) {
+        const argVal = this.evaluate(expression.args[0]!);
+        const argAddr = argVal.kind === 'aggregate' || argVal.kind === 'pointer' ? argVal.address : 0;
+        rngEngine = this.randomEngines.get(argAddr);
+      }
+      const raw = rngEngine ? rngEngine.next() : Math.floor(Math.random() * 4294967296);
+      const range = dist.max - dist.min + 1;
+      const res = dist.min + (range > 0 ? (raw >>> 0) % range : 0);
+      return intValue(intType(), res);
+    }
+
+    // Direct call on a random engine: `rng()`
+    if (isMt19937Type(value.type)) {
+      const valAddr = value.kind === 'aggregate' || value.kind === 'pointer' ? value.address : 0;
+      const engine = this.randomEngines.get(valAddr);
+      const res = engine ? engine.next() : Math.floor(Math.random() * 4294967296);
+      return {
+        kind: 'int',
+        type: { kind: 'int', name: 'unsigned int', size: 4, signed: false, bits: 32 },
+        value: res >>> 0,
+      };
     }
 
     throw new RuntimeFault('call of a value that is not a function', expression.start);
@@ -4455,6 +4707,32 @@ class Interpreter {
     const object = this.evaluateRaw(member.object);
     const property = member.property;
 
+    if (object.kind === 'aggregate' && isDurationType(object.type)) {
+      if (property === 'count') {
+        const micros = this.chronoDurations.get(object.address) ?? this.memory.readInt64(object.address);
+        return intValue(longType(), micros);
+      }
+    }
+
+    if (object.kind === 'aggregate' && (isOfstreamType(object.type) || isIfstreamType(object.type))) {
+      const stream = this.fileStreams.get(object.address);
+      if (property === 'is_open') {
+        return intValue(intType(), stream?.open ? 1 : 0);
+      }
+      if (property === 'close') {
+        if (stream) stream.open = false;
+        return voidValue();
+      }
+      if (property === 'open') {
+        const fname = args[0] ? this.readStringValue(this.evaluate(args[0])) : 'file.txt';
+        const isOut = isOfstreamType(object.type);
+        const exists = isOut ? true : this.virtualFiles.has(fname);
+        this.fileStreams.set(object.address, { filename: fname, mode: isOut ? 'out' : 'in', open: exists, cursor: 0 });
+        this.memory.writeUint8(object.address, exists ? 1 : 0);
+        return voidValue();
+      }
+    }
+
     if (object.kind === 'aggregate' && isVectorType(object.type)) {
       const address = object.address;
       const element = this.vectorElement(address, object.type);
@@ -4994,14 +5272,114 @@ class Interpreter {
       'get', 'any_cast', 'ref', 'bind',
       'make_unique', 'make_shared',
     ]);
-    if (!name.startsWith('std::') && !supported.has(base)) return undefined;
-    if (!supported.has(base)) return undefined;
+    const isClockNow =
+      name === 'chrono::steady_clock::now' ||
+      name === 'std::chrono::steady_clock::now' ||
+      name === 'steady_clock::now' ||
+      name === 'chrono::system_clock::now' ||
+      name === 'std::chrono::system_clock::now' ||
+      name === 'system_clock::now' ||
+      base === 'chrono::steady_clock::now' ||
+      base === 'steady_clock::now' ||
+      base === 'chrono::system_clock::now' ||
+      base === 'system_clock::now';
+
+    if (isClockNow) {
+      const t = timePointType();
+      const addr = this.allocateFor(t);
+      const nowMicros = Math.round(performance.now() * 1000) + this.steps;
+      this.chronoTimePoints.set(addr, nowMicros);
+      this.memory.writeInt64(addr, nowMicros);
+      return { kind: 'aggregate', type: t, address: addr };
+    }
 
     const argumentAt = (index: number): Value => {
       const expression = args[index];
       if (!expression) throw new RuntimeFault(`${name} needs more arguments`, position);
       return this.evaluateRaw(expression);
     };
+
+    const isDurationCast =
+      name === 'chrono::duration_cast' ||
+      name === 'std::chrono::duration_cast' ||
+      name === 'duration_cast' ||
+      base === 'duration_cast' ||
+      base === 'chrono::duration_cast';
+
+    if (isDurationCast) {
+      const argVal = argumentAt(0);
+      const argAddr = argVal.kind === 'aggregate' ? argVal.address : 0;
+      const micros = this.chronoDurations.get(argAddr) ?? (argAddr ? this.memory.readInt64(argAddr) : 0);
+      const cleanUnit = (templateArg ?? 'microseconds')
+        .replace(/^std::/, '')
+        .replace(/^chrono::/, '')
+        .trim();
+      let converted = micros;
+      if (cleanUnit === 'nanoseconds') converted = micros * 1000;
+      else if (cleanUnit === 'microseconds') converted = micros;
+      else if (cleanUnit === 'milliseconds') converted = Math.trunc(micros / 1000);
+      else if (cleanUnit === 'seconds') converted = Math.trunc(micros / 1000000);
+      else if (cleanUnit === 'minutes') converted = Math.trunc(micros / 60000000);
+      else if (cleanUnit === 'hours') converted = Math.trunc(micros / 3600000000);
+
+      const dType = durationType(cleanUnit);
+      const dAddr = this.allocateFor(dType);
+      this.chronoDurations.set(dAddr, converted);
+      this.memory.writeInt64(dAddr, converted);
+      return { kind: 'aggregate', type: dType, address: dAddr };
+    }
+
+    const isGetline = name === 'getline' || name === 'std::getline' || base === 'getline';
+    if (isGetline) {
+      const streamVal = argumentAt(0);
+      const streamAddr = streamVal.kind === 'aggregate' ? streamVal.address : toPointerAddress(streamVal);
+      const fs = streamAddr !== null ? this.fileStreams.get(streamAddr) : undefined;
+      const lineLvalue = args[1] ? this.lvalue(args[1]) : null;
+
+      if (fs) {
+        if (!fs.open) {
+          return intValue(intType(), 0);
+        }
+        const text = this.virtualFiles.get(fs.filename) ?? '';
+        if (fs.cursor >= text.length) {
+          fs.open = false;
+          return intValue(intType(), 0);
+        }
+        const nextNewline = text.indexOf('\n', fs.cursor);
+        let lineContent = '';
+        if (nextNewline === -1) {
+          lineContent = text.slice(fs.cursor);
+          fs.cursor = text.length;
+        } else {
+          lineContent = text.slice(fs.cursor, nextNewline);
+          fs.cursor = nextNewline + 1;
+        }
+        if (lineLvalue) {
+          this.createString(lineLvalue.address, lineContent);
+        }
+        return streamVal;
+      }
+
+      if (this.stdinCursor < this.stdinText.length) {
+        const nextNewline = this.stdinText.indexOf('\n', this.stdinCursor);
+        let lineContent = '';
+        if (nextNewline === -1) {
+          lineContent = this.stdinText.slice(this.stdinCursor);
+          this.stdinCursor = this.stdinText.length;
+        } else {
+          lineContent = this.stdinText.slice(this.stdinCursor, nextNewline);
+          this.stdinCursor = nextNewline + 1;
+        }
+        if (lineLvalue) {
+          this.createString(lineLvalue.address, lineContent);
+        }
+        return streamVal;
+      }
+      return intValue(intType(), 0);
+    }
+
+    if (!name.startsWith('std::') && !supported.has(base)) return undefined;
+    if (!supported.has(base)) return undefined;
 
     switch (base) {
       case 'make_unique':
@@ -6160,6 +6538,7 @@ class Interpreter {
     | { readonly kind: 'stdout' }
     | { readonly kind: 'stderr' }
     | { readonly kind: 'buffer'; readonly binding: Binding }
+    | { readonly kind: 'file'; readonly address: number }
     | null {
     if (expression.kind === 'identifier') {
       if (expression.name === 'std::cout' || expression.name === 'cout') return { kind: 'stdout' };
@@ -6168,6 +6547,7 @@ class Interpreter {
       const binding = this.lookup(expression.name);
       if (!binding) return null;
       if (binding.type.name.includes('cerr')) return { kind: 'stderr' };
+      if (isOfstreamType(binding.type)) return { kind: 'file', address: binding.address };
       if (binding.type.name.includes('ostream')) return { kind: 'stdout' };
       if (isStreamBuffer(binding.type)) return { kind: 'buffer', binding };
       return null;
@@ -6203,6 +6583,10 @@ class Interpreter {
 
   private streamText(value: Value): string {
     if (value.type.name === 'std::endl') return '\n';
+    if (value.type.kind === 'bool' || value.type.name === 'bool') {
+      const num = toNumber(value);
+      return this.boolalphaEnabled ? (num !== 0 ? 'true' : 'false') : (num !== 0 ? '1' : '0');
+    }
     return this.plainText(value);
   }
 

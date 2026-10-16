@@ -376,6 +376,99 @@ const SIMPLE: Record<string, SimpleBuiltin> = {
     returns: 'int',
     call: (args, ctx) => intResult(ctx, String.fromCharCode(numberArg(args, 0) & 0xff).toLowerCase().charCodeAt(0)),
   },
+
+  // --------------------------------------------------------------- gcc / clang builtins
+  __builtin_popcount: {
+    returns: 'int',
+    call: (args, ctx) => {
+      let v = numberArg(args, 0) >>> 0;
+      let count = 0;
+      while (v > 0) {
+        count += v & 1;
+        v >>>= 1;
+      }
+      return intResult(ctx, count);
+    },
+  },
+  __builtin_popcountll: {
+    returns: 'int',
+    call: (args, ctx) => {
+      const v = BigInt(Math.trunc(numberArg(args, 0)));
+      let count = 0;
+      let uv = BigInt.asUintN(64, v);
+      while (uv > 0n) {
+        if (uv & 1n) count++;
+        uv >>= 1n;
+      }
+      return intResult(ctx, count);
+    },
+  },
+  __builtin_clz: {
+    returns: 'int',
+    call: (args, ctx) => {
+      const v = numberArg(args, 0) >>> 0;
+      return intResult(ctx, Math.clz32(v));
+    },
+  },
+  __builtin_ctz: {
+    returns: 'int',
+    call: (args, ctx) => {
+      const v = numberArg(args, 0) >>> 0;
+      if (v === 0) return intResult(ctx, 32);
+      return intResult(ctx, 31 - Math.clz32(v & -v));
+    },
+  },
+  __builtin_expect: {
+    returns: 'long',
+    call: (args, ctx) => longResult(ctx, Math.trunc(numberArg(args, 0))),
+  },
+  __builtin_unreachable: {
+    returns: 'void',
+    call: () => ({ kind: 'void', type: { kind: 'void', name: 'void', size: 0, signed: false, bits: 0 } }),
+  },
+  __builtin_constant_p: {
+    returns: 'int',
+    call: (_args, ctx) => intResult(ctx, 0),
+  },
+  __builtin_abs: {
+    returns: 'int',
+    call: (args, ctx) => intResult(ctx, Math.abs(Math.trunc(numberArg(args, 0)))),
+  },
+  __builtin_bswap16: {
+    returns: 'int',
+    call: (args, ctx) => {
+      const v = numberArg(args, 0) & 0xffff;
+      return intResult(ctx, ((v & 0xff) << 8) | ((v >> 8) & 0xff));
+    },
+  },
+  __builtin_bswap32: {
+    returns: 'int',
+    call: (args, ctx) => {
+      const v = numberArg(args, 0) >>> 0;
+      const swapped =
+        ((v & 0xff) << 24) |
+        ((v & 0xff00) << 8) |
+        ((v >> 8) & 0xff00) |
+        ((v >>> 24) & 0xff);
+      return intResult(ctx, swapped >>> 0);
+    },
+  },
+  __builtin_bswap64: {
+    returns: 'long',
+    call: (args, ctx) => {
+      const v = BigInt.asUintN(64, BigInt(Math.trunc(numberArg(args, 0))));
+      const b0 = (v & 0xffn) << 56n;
+      const b1 = (v & 0xff00n) << 40n;
+      const b2 = (v & 0xff0000n) << 24n;
+      const b3 = (v & 0xff000000n) << 8n;
+      const b4 = (v >> 8n) & 0xff000000n;
+      const b5 = (v >> 24n) & 0xff0000n;
+      const b6 = (v >> 40n) & 0xff00n;
+      const b7 = (v >> 56n) & 0xffn;
+      const swapped = b0 | b1 | b2 | b3 | b4 | b5 | b6 | b7;
+      return longResult(ctx, Number(BigInt.asIntN(64, swapped)));
+    },
+  },
 };
 
 function withChar(predicate: (code: number) => boolean): SimpleBuiltin['call'] {
