@@ -21,6 +21,7 @@ import {
   containerKindOf,
   elementKindCode,
   elementTypeFromCode,
+  isBitsetType,
   isFloatType,
   isIntegerType,
   isNumericType,
@@ -1087,6 +1088,10 @@ class Interpreter {
         // makes the same template work for int and for double.
         address = this.allocateFor({ ...type, size: 8 });
         this.memory.fill(address, 0, 8);
+      } else if (declaration.initializer && declaration.initializer.kind === 'init-list') {
+        const count = Math.max(declaration.initializer.items.length, 1);
+        address = this.allocateFor({ ...type, size: count * 8 });
+        this.memory.fill(address, 0, count * 8);
       } else if (declaration.initializer) {
         const initial = this.evaluate(declaration.initializer);
         type = initial.type;
@@ -1144,6 +1149,37 @@ class Interpreter {
       this.createString(address, '');
       this.record(binding, declaration.start);
     }
+
+    if (declaration.structuredBindings) {
+      const bindingType = binding.type;
+      declaration.structuredBindings.forEach((subName, i) => {
+        if (bindingType.members && bindingType.members[i]) {
+          const member = bindingType.members[i];
+          const subBinding: Binding = {
+            name: subName,
+            type: member.type,
+            address: address + member.offset,
+            storage: binding.storage,
+            scopeName,
+            declaredAt: declaration.start,
+          };
+          this.bind(subBinding);
+          this.record(subBinding, declaration.start);
+        } else if (bindingType.kind === 'array' && bindingType.element) {
+          const stride = Math.max(bindingType.element.size, 1);
+          const subBinding: Binding = {
+            name: subName,
+            type: bindingType.element,
+            address: address + i * stride,
+            storage: binding.storage,
+            scopeName,
+            declaredAt: declaration.start,
+          };
+          this.bind(subBinding);
+          this.record(subBinding, declaration.start);
+        }
+      });
+    }
   }
 
   private initialize(binding: Binding, initializer: Expression): void {
@@ -1176,6 +1212,18 @@ class Interpreter {
             : this.readStringValue(value);
       }
       this.createString(binding.address, text);
+      return;
+    }
+
+    if (isBitsetType(binding.type)) {
+      let val = 0;
+      if (initializer.kind === 'init-list') {
+        const first = initializer.items[0];
+        if (first) val = toNumber(this.evaluate(first));
+      } else {
+        val = toNumber(this.evaluate(initializer));
+      }
+      this.memory.writeUint32(binding.address, val >>> 0);
       return;
     }
 
@@ -1645,11 +1693,13 @@ class Interpreter {
           : this.typeOf(expression.ofExpression ?? expression);
         return intValue(longType(), Math.max(type.size, 1));
       }
-      case 'init-list':
-        throw new RuntimeFault(
-          'initializer list is only valid in a declaration',
-          expression.start,
-        );
+      case 'init-list': {
+        let result: Value = voidValue();
+        for (const item of expression.items) {
+          result = this.evaluate(item);
+        }
+        return result;
+      }
       case 'unknown':
         throw new RuntimeFault(
           `cannot evaluate '${expression.text}'`,
@@ -3428,8 +3478,29 @@ class Interpreter {
     const data = this.builtinAlloc(capacity * elementSize);
 
     items.forEach((item, index) => {
-      if (item.kind === 'init-list') return;
       const slot = data + index * elementSize;
+      if (item.kind === 'init-list') {
+        if (isPairType(element)) {
+          const firstExpr = item.items[0];
+          const secondExpr = item.items[1];
+          const firstMember = element.members?.[0];
+          const secondMember = element.members?.[1];
+          if (firstMember && firstExpr) {
+            const k = this.valueForType(firstMember.type, this.evaluate(firstExpr));
+            this.store(firstMember.type, slot + firstMember.offset, k);
+          }
+          if (secondMember && secondExpr) {
+            const v = this.valueForType(secondMember.type, this.evaluate(secondExpr));
+            this.store(secondMember.type, slot + secondMember.offset, v);
+          }
+          return;
+        }
+        if (element.kind === 'struct' || element.kind === 'union') {
+          this.initializeAggregate(element, slot, item.items);
+          return;
+        }
+        return;
+      }
       // A `std::string` element is a string object, not the characters of the
       // literal: storing the bytes would later be read back as a data pointer,
       // which is exactly what made `vector<string>` unreadable.
@@ -3735,7 +3806,9 @@ class Interpreter {
   }
 
   private stringText(address: number): string {
-    return this.memory.readCString(this.memory.readUint64(address), 1 << 16);
+    const ptr = this.memory.readUint64(address);
+    if (ptr === 0) return '';
+    return this.memory.readCString(ptr, 1 << 16);
   }
 
   private stringAppend(address: number, extra: string): void {
@@ -3756,6 +3829,11 @@ class Interpreter {
     }
     if (value.kind === 'aggregate') {
       if (isStringType(value.type)) return this.stringText(value.address);
+      if (isBitsetType(value.type)) {
+        const bits = value.type.bits > 0 ? value.type.bits : 8;
+        const val = this.memory.readUint32(value.address);
+        return (val >>> 0).toString(2).padStart(bits, '0');
+      }
       if (value.type.kind === 'array' && value.type.element?.kind === 'char') {
         return this.memory.readCString(value.address, 1 << 16);
       }
@@ -3908,12 +3986,46 @@ class Interpreter {
       };
       this.bind(binding);
 
+      const subBindings: Binding[] = [];
+      if (declaration.structuredBindings) {
+        declaration.structuredBindings.forEach((subName, i) => {
+          if (elementType.members && elementType.members[i]) {
+            const member = elementType.members[i];
+            const sub: Binding = {
+              name: subName,
+              type: member.type,
+              address: address + member.offset,
+              storage: 'local',
+              scopeName: this.currentScopeName(),
+              declaredAt: declaration.start,
+            };
+            this.bind(sub);
+            subBindings.push(sub);
+          } else if (elementType.kind === 'array' && elementType.element) {
+            const stride = Math.max(elementType.element.size, 1);
+            const sub: Binding = {
+              name: subName,
+              type: elementType.element,
+              address: address + i * stride,
+              storage: 'local',
+              scopeName: this.currentScopeName(),
+              declaredAt: declaration.start,
+            };
+            this.bind(sub);
+            subBindings.push(sub);
+          }
+        });
+      }
+
       this.iterationCounters.set(statement.start.offset, 0);
       for (let index = 0; index < sequence.length; index += 1) {
         this.tick();
         const value = this.load(sequence.element, sequence.data + index * sequence.stride);
         this.store(elementType, address, convertTo(elementType, value));
         this.record(binding, declaration.start);
+        for (const sub of subBindings) {
+          this.record(sub, declaration.start);
+        }
 
         const lines = this.beginIteration();
         let breaking = false;
@@ -4250,6 +4362,27 @@ class Interpreter {
         }
         default:
           throw new RuntimeFault(`std::string has no member '${property}'`, position);
+      }
+    }
+
+    if (object.kind === 'aggregate' && isBitsetType(object.type)) {
+      const address = object.address;
+      const bits = object.type.bits > 0 ? object.type.bits : 8;
+      switch (property) {
+        case 'count': {
+          const num = this.memory.readUint32(address);
+          let c = 0;
+          let v = num >>> 0;
+          while (v > 0) {
+            c += v & 1;
+            v >>>= 1;
+          }
+          return intValue(intType(), c);
+        }
+        case 'size':
+          return intValue(longType(), bits);
+        default:
+          throw new RuntimeFault(`std::bitset has no member '${property}'`, position);
       }
     }
 

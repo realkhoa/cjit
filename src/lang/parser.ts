@@ -90,6 +90,7 @@ interface Specifiers {
 interface Declarator {
   readonly name?: string;
   readonly type: TypeRef;
+  readonly structuredBindings?: readonly string[];
 }
 
 export function parse(tokens: readonly Token[], file: string): ParseResult {
@@ -924,6 +925,7 @@ class Parser {
     }
 
     let name: string | undefined;
+    let structuredBindings: string[] | undefined;
     if (this.check('[')) {
       // C++17 structured binding: auto [a, b] = ... or const auto& [a, b] : ...
       this.advance();
@@ -937,6 +939,7 @@ class Parser {
         if (this.check(',')) this.advance();
       }
       this.expect(']', "expected ']' to close structured binding");
+      structuredBindings = names;
       name = names[0] ?? '__binding';
     } else if (this.isNameToken(this.peek())) {
       name = this.advance().text;
@@ -1029,7 +1032,7 @@ class Parser {
       break;
     }
 
-    return { name, type };
+    return { name, type, ...(structuredBindings ? { structuredBindings } : {}) };
   }
 
   /**
@@ -1331,6 +1334,7 @@ class Parser {
           name: declarator.name ?? '<anonymous>',
           type: declarator.type,
           storage: spec.storage,
+          ...(declarator.structuredBindings ? { structuredBindings: declarator.structuredBindings } : {}),
           ...(initializer === undefined ? {} : { initializer }),
           start: declaratorStart,
           end: this.previousEnd(),

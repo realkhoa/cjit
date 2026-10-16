@@ -227,6 +227,8 @@ export interface VarDecl extends Node {
   readonly type: TypeRef;
   readonly storage: readonly StorageClass[];
   readonly initializer?: Expression;
+  /** C++17 structured bindings: `auto [a, b] = ...` */
+  readonly structuredBindings?: readonly string[];
 }
 
 export interface TypedefDeclNode extends Node {

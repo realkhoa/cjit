@@ -294,12 +294,17 @@ const CONTAINER_KINDS: readonly (readonly [string, ContainerKind])[] = [
   ['priority_queue', 'priority-queue'],
   ['unordered_map', 'map'],
   ['unordered_set', 'set'],
+  ['multiset', 'set'],
+  ['multimap', 'map'],
   ['vector', 'vector'],
+  ['array', 'vector'],
   ['set', 'set'],
   ['map', 'map'],
   ['queue', 'queue'],
   ['stack', 'stack'],
   ['deque', 'deque'],
+  ['list', 'deque'],
+  ['forward_list', 'deque'],
 ];
 
 export function containerKindOf(type: CType): ContainerKind | null {
@@ -340,13 +345,94 @@ export function pairParts(type: CType): { readonly key: CType; readonly value: C
   return first && second ? { key: first, value: second } : null;
 }
 
+/**
+ * @brief Constructs a CType descriptor for std::tuple.
+ * @param elements Component types of the tuple.
+ * @return A CType representing std::tuple.
+ */
+export function tupleType(elements: readonly CType[]): CType {
+  let offset = 0;
+  let maxAlign = 1;
+  const members: CTypeMember[] = [];
+  elements.forEach((element, index) => {
+    const align = alignOf(element);
+    maxAlign = Math.max(maxAlign, align);
+    offset = alignUp(offset, align);
+    members.push({ name: `_${index}`, offset, type: element });
+    offset += Math.max(element.size, 1);
+  });
+  const size = alignUp(offset, maxAlign);
+  return {
+    kind: 'struct',
+    name: `std::tuple<${elements.map((e) => e.name).join(', ')}>`,
+    size,
+    signed: false,
+    bits: 0,
+    members,
+  };
+}
+
 function containerType(name: string, element: CType, displayName?: string): CType {
   const base = vectorType(element);
   return { ...base, name: `std::${name}<${displayName ?? element.name}>` };
 }
 
+/**
+ * @brief Checks if a CType represents a std::vector or std::array container.
+ * @param type The type to inspect.
+ * @return True if the type is a vector or std::array container struct.
+ */
 export function isVectorType(type: CType): boolean {
-  return type.kind === 'struct' && type.name.startsWith('std::vector<');
+  return (
+    type.kind === 'struct' &&
+    (type.name.startsWith('std::vector<') || type.name.startsWith('std::array<'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::array<T, N>.
+ * @param element Element type stored in the array.
+ * @param length Fixed number of elements in the array.
+ * @return A CType representing std::array<T, N>.
+ */
+export function stdArrayType(element: CType, length: number): CType {
+  const base = vectorType(element);
+  return { ...base, name: `std::array<${element.name}, ${length}>`, length };
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::bitset<N>.
+ * @param bits Number of bits in the bitset.
+ * @return A CType representing std::bitset<N>.
+ */
+export function bitsetType(bits: number): CType {
+  const bytes = Math.max(Math.ceil(bits / 8), 4);
+  return {
+    kind: 'struct',
+    name: `std::bitset<${bits}>`,
+    size: bytes,
+    signed: false,
+    bits,
+    members: [
+      {
+        name: '__bits',
+        offset: 0,
+        type: { kind: 'int', name: 'unsigned long', size: bytes, signed: false, bits: bytes * 8 },
+      },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::bitset.
+ * @param type The type to inspect.
+ * @return True if the type is a std::bitset struct.
+ */
+export function isBitsetType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::bitset' || type.name.startsWith('std::bitset<'))
+  );
 }
 
 export function setType(element: CType): CType {
@@ -803,7 +889,7 @@ export class TypeResolver {
 
     // C++ containers the engine resolves itself, so no diagnostic is needed.
     const containerMatch =
-      /^(?:std::)?(vector|set|map|queue|stack|deque|priority_queue|unordered_set|unordered_map)\s*<(.+)>$/.exec(
+      /^(?:std::)?(vector|set|multiset|map|multimap|queue|stack|deque|priority_queue|unordered_set|unordered_map|list|forward_list)\s*<(.+)>$/.exec(
         name,
       );
     if (containerMatch) {
@@ -811,7 +897,7 @@ export class TypeResolver {
       const argumentText = containerMatch[2] ?? 'int';
       const args = splitTemplateArguments(argumentText);
 
-      if (containerName === 'map' || containerName === 'unordered_map') {
+      if (containerName === 'map' || containerName === 'unordered_map' || containerName === 'multimap') {
         const key = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
         const value = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
         const type = mapType(key, value);
@@ -821,15 +907,21 @@ export class TypeResolver {
          * conformant. Their bucket and hash APIs are not implemented, and a call to
          * one says so rather than returning something invented.
          */
-        return containerName === 'unordered_map'
-          ? { ...type, name: `std::unordered_map<${key.name}, ${value.name}>` }
-          : type;
+        if (containerName === 'unordered_map') {
+          return { ...type, name: `std::unordered_map<${key.name}, ${value.name}>` };
+        }
+        if (containerName === 'multimap') {
+          return { ...type, name: `std::multimap<${key.name}, ${value.name}>` };
+        }
+        return type;
       }
 
       const resolved = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
       switch (containerName) {
         case 'set':
           return setType(resolved);
+        case 'multiset':
+          return { ...setType(resolved), name: `std::multiset<${resolved.name}>` };
         case 'unordered_set':
           return { ...setType(resolved), name: `std::unordered_set<${resolved.name}>` };
         case 'queue':
@@ -838,17 +930,44 @@ export class TypeResolver {
           return stackType(resolved);
         case 'deque':
           return dequeType(resolved);
+        case 'list':
+          return { ...dequeType(resolved), name: `std::list<${resolved.name}>` };
+        case 'forward_list':
+          return { ...dequeType(resolved), name: `std::forward_list<${resolved.name}>` };
         case 'priority_queue':
           return priorityQueueType(resolved);
         default:
           return vectorType(resolved);
       }
     }
-    const pairMatch = /^(?:std::)?pair\s*<(.+)>$/.exec(name);    if (pairMatch) {
+
+    const arrayMatch = /^(?:std::)?array\s*<(.+)>$/.exec(name);
+    if (arrayMatch) {
+      const args = splitTemplateArguments(arrayMatch[1] ?? 'int, 1');
+      const element = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
+      const length = parseInt((args[1] ?? '1').trim(), 10) || 1;
+      return stdArrayType(element, length);
+    }
+
+    const bitsetMatch = /^(?:std::)?bitset\s*<(.+)>$/.exec(name);
+    if (bitsetMatch) {
+      const length = parseInt((bitsetMatch[1] ?? '8').trim(), 10) || 8;
+      return bitsetType(length);
+    }
+
+    const pairMatch = /^(?:std::)?pair\s*<(.+)>$/.exec(name);
+    if (pairMatch) {
       const args = splitTemplateArguments(pairMatch[1] ?? 'int, int');
       const first = this.resolveByName((args[0] ?? 'int').trim(), depth + 1);
       const second = this.resolveByName((args[1] ?? 'int').trim(), depth + 1);
       return pairType(first, second);
+    }
+
+    const tupleMatch = /^(?:std::)?tuple\s*<(.+)>$/.exec(name);
+    if (tupleMatch) {
+      const args = splitTemplateArguments(tupleMatch[1] ?? '');
+      const elements = args.map((arg) => this.resolveByName(arg.trim(), depth + 1));
+      return tupleType(elements);
     }
 
     /*

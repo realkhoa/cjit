@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 import { analyzeSource } from '@/lang/analyze';
+import { execute } from '@/lang/runtime/interpreter';
 
 const USER_CODE = `#include <algorithm>
 #include <array>
@@ -551,5 +552,44 @@ void f() {
 }`;
     const result = analyzeSource(code, 'main.cpp');
     expect(result.errorCount).toBe(0);
+  });
+
+  it('runs demoContainers through the fast interpreter without faulting', () => {
+    const demoContainersSrc = USER_CODE.slice(
+      USER_CODE.indexOf('void demoContainers()'),
+      USER_CODE.indexOf('void demoAlgorithms()'),
+    );
+    const code = `using namespace std;
+${demoContainersSrc}
+int main() {
+    demoContainers();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    console.log('Execution result demoContainers:', {
+      status: exec.status,
+      detail: (exec as any).detail,
+      diagnostics: exec.diagnostics,
+      stdout: (exec as any).output ?? (exec as any).stdout,
+    });
+    expect(exec.status).toBe('ok');
+    expect(exec.diagnostics).toHaveLength(0);
+  });
+
+  it('executes std::tuple and structured bindings correctly', () => {
+    const code = `using namespace std;
+int main() {
+    tuple<string, int, double> data{"Bob", 25, 88.5};
+    auto [name, age, score] = data;
+    cout << name << ' ' << age << ' ' << score << '\\n';
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Bob 25 88.5');
   });
 });
