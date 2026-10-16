@@ -658,4 +658,27 @@ int main() {
     expect(exec.stdout).toContain('Starts with Modern: true');
     expect(exec.stdout).toContain('Ends with STL: true');
   });
+
+  it('runs demoContainers, demoAlgorithms, and demoStrings together without error', () => {
+    const code = USER_CODE.slice(
+      0,
+      USER_CODE.indexOf('void demoUtilities()'),
+    ) + `
+int main() {
+    demoContainers();
+    demoAlgorithms();
+    demoStrings();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('SEQUENTIAL DIAGNOSTICS:', exec.diagnostics);
+      console.log('SEQUENTIAL ERROR:', exec.error);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Number: 20');
+    expect(exec.stdout).toContain('Number: 2026');
+  });
 });
