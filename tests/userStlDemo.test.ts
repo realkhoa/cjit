@@ -681,4 +681,67 @@ int main() {
     expect(exec.stdout).toContain('Number: 20');
     expect(exec.stdout).toContain('Number: 2026');
   });
+
+  it('runs demoUtilities without faulting', () => {
+    const demoUtilitiesSrc = USER_CODE.slice(
+      USER_CODE.indexOf('void demoUtilities()'),
+      USER_CODE.indexOf('void demoMemory()'),
+    );
+    const code = `using namespace std;
+template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+T add(T a, T b) {
+    return a + b;
+}
+${demoUtilitiesSrc}
+int main() {
+    demoUtilities();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('UTILITIES DIAGNOSTICS:', exec.diagnostics);
+      console.log('UTILITIES DETAIL:', exec.detail);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Alice, 30');
+    expect(exec.stdout).toContain('Bob 25 88.5');
+    expect(exec.stdout).toContain('Optional: 42');
+    expect(exec.stdout).toContain('No value available');
+    expect(exec.stdout).toContain('Hello variant');
+    expect(exec.stdout).toContain('100');
+    expect(exec.stdout).toContain('Stored in any');
+    expect(exec.stdout).toContain('123');
+    expect(exec.stdout).toContain('Function: 7');
+    expect(exec.stdout).toContain('Bind: 10');
+    expect(exec.stdout).toContain('Reference wrapper: 20');
+  });
+
+  it('runs demoContainers, demoAlgorithms, demoStrings, and demoUtilities sequentially together without error', () => {
+    const code = USER_CODE.slice(
+      0,
+      USER_CODE.indexOf('void demoMemory()'),
+    ) + `
+int main() {
+    demoContainers();
+    demoAlgorithms();
+    demoStrings();
+    demoUtilities();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('SEQUENTIAL 4 DEMOS DIAGNOSTICS:', exec.diagnostics);
+      console.log('SEQUENTIAL 4 DEMOS DETAIL:', exec.detail);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Vector size: 6');
+    expect(exec.stdout).toContain('Even count: 4');
+    expect(exec.stdout).toContain('Starts with Modern: true');
+    expect(exec.stdout).toContain('Optional: 42');
+    expect(exec.stdout).toContain('Reference wrapper: 20');
+  });
 });

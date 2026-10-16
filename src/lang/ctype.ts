@@ -372,6 +372,147 @@ export function tupleType(elements: readonly CType[]): CType {
   };
 }
 
+/**
+ * @brief Constructs a CType descriptor for std::optional<T>.
+ * @details Represents a wrapper holding an optional value of type T alongside
+ * a boolean discriminant flag indicating presence.
+ * @param element Contained element type.
+ * @return A CType representing std::optional<T>.
+ */
+export function optionalType(element: CType): CType {
+  const align = Math.max(alignOf(element), 8);
+  const size = alignUp(8 + Math.max(element.size, 1), align);
+  return {
+    kind: 'struct',
+    name: `std::optional<${element.name}>`,
+    size,
+    signed: false,
+    bits: 0,
+    element,
+    members: [
+      { name: '__has_value', offset: 0, type: { kind: 'bool', name: 'bool', size: 1, signed: false, bits: 8 } },
+      { name: '__value', offset: 8, type: element },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::optional object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents std::optional, false otherwise.
+ */
+export function isOptionalType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::optional' ||
+      type.name.startsWith('std::optional<') ||
+      type.name === 'optional' ||
+      type.name.startsWith('optional<'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::variant<...>.
+ * @details Represents a type-safe union that holds one of the specified alternative types.
+ * @param elements Component alternative types of the variant.
+ * @return A CType representing std::variant<...>.
+ */
+export function variantType(elements: readonly CType[]): CType {
+  const maxAlign = elements.reduce((acc, t) => Math.max(acc, alignOf(t)), 8);
+  const maxSize = elements.reduce((acc, t) => Math.max(acc, Math.max(t.size, 1)), 8);
+  const size = alignUp(8 + maxSize, maxAlign);
+  return {
+    kind: 'struct',
+    name: `std::variant<${elements.map((e) => e.name).join(', ')}>`,
+    size,
+    signed: false,
+    bits: 0,
+    members: [
+      { name: '__index', offset: 0, type: { kind: 'int', name: 'int', size: 4, signed: true, bits: 32 } },
+      { name: '__data', offset: 8, type: elements[0] ?? { kind: 'int', name: 'int', size: 4, signed: true, bits: 32 } },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::variant object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents std::variant, false otherwise.
+ */
+export function isVariantType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::variant' ||
+      type.name.startsWith('std::variant<') ||
+      type.name === 'variant' ||
+      type.name.startsWith('variant<'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::any.
+ * @details Represents a type-safe container for single values of any copy-constructible type.
+ * @return A CType representing std::any.
+ */
+export function anyType(): CType {
+  return {
+    kind: 'struct',
+    name: 'std::any',
+    size: 16,
+    signed: false,
+    bits: 0,
+    members: [
+      { name: '__type', offset: 0, type: { kind: 'int', name: 'long', size: 8, signed: true, bits: 64 } },
+      { name: '__data', offset: 8, type: pointerTo(VOID_TYPE) },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::any object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents std::any, false otherwise.
+ */
+export function isAnyType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::any' || type.name === 'any')
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::reference_wrapper<T>.
+ * @details Wraps a reference in a copyable, assignable object holding a pointer to T.
+ * @param element The referenced element type.
+ * @return A CType representing std::reference_wrapper<T>.
+ */
+export function referenceWrapperType(element: CType): CType {
+  return {
+    kind: 'struct',
+    name: `std::reference_wrapper<${element.name}>`,
+    size: 8,
+    signed: false,
+    bits: 64,
+    element,
+    members: [{ name: '__ptr', offset: 0, type: pointerTo(element) }],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::reference_wrapper object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents reference_wrapper, false otherwise.
+ */
+export function isReferenceWrapperType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::reference_wrapper' ||
+      type.name.startsWith('std::reference_wrapper<') ||
+      type.name === 'reference_wrapper' ||
+      type.name.startsWith('reference_wrapper<'))
+  );
+}
+
 function containerType(name: string, element: CType, displayName?: string): CType {
   const base = vectorType(element);
   return { ...base, name: `std::${name}<${displayName ?? element.name}>` };
@@ -897,6 +1038,10 @@ export class TypeResolver {
       const behavioural =
         isStringType(resolved) ||
         isPairType(resolved) ||
+        isOptionalType(resolved) ||
+        isVariantType(resolved) ||
+        isAnyType(resolved) ||
+        isReferenceWrapperType(resolved) ||
         containerKindOf(resolved) !== null ||
         resolved.kind === 'array' ||
         resolved.kind === 'pointer';
@@ -1003,6 +1148,27 @@ export class TypeResolver {
       const elements = args.map((arg) => this.resolveByName(arg.trim(), depth + 1));
       return tupleType(elements);
     }
+
+    const optionalMatch = /^(?:std::)?optional\s*<(.+)>$/.exec(name);
+    if (optionalMatch) {
+      const element = this.resolveByName((optionalMatch[1] ?? 'int').trim(), depth + 1);
+      return optionalType(element);
+    }
+
+    const variantMatch = /^(?:std::)?variant\s*<(.+)>$/.exec(name);
+    if (variantMatch) {
+      const args = splitTemplateArguments(variantMatch[1] ?? 'int');
+      const elements = args.map((arg) => this.resolveByName(arg.trim(), depth + 1));
+      return variantType(elements);
+    }
+
+    const refWrapMatch = /^(?:std::)?reference_wrapper\s*<(.+)>$/.exec(name);
+    if (refWrapMatch) {
+      const element = this.resolveByName((refWrapMatch[1] ?? 'int').trim(), depth + 1);
+      return referenceWrapperType(element);
+    }
+
+    if (name === 'std::any' || name === 'any') return anyType();
 
     /*
      * `std::function<int(int)>` is a callable held in a variable: eight bytes of closure,

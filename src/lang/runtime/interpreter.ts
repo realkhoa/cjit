@@ -28,6 +28,11 @@ import {
   isPointerType,
   isPairType,
   pairType,
+  isOptionalType,
+  isVariantType,
+  isAnyType,
+  isReferenceWrapperType,
+  referenceWrapperType,
   isRegexIteratorType,
   isRegexType,
   isStreamBuffer,
@@ -511,6 +516,9 @@ class Interpreter {
   >();
   private closureSeq = 0;
   private readonly regexIterators = new Map<number, { matches: string[]; index: number }>();
+  private readonly variants = new Map<number, Value>();
+  private readonly anyValues = new Map<number, Value>();
+  private readonly boundCallables = new Map<number, { target: Value; boundArgs: Value[] }>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -1160,6 +1168,10 @@ class Interpreter {
       this.uninitialized.delete(address);
       this.regexIterators.set(address, { matches: [], index: 0 });
       this.record(binding, declaration.start);
+    } else if (isOptionalType(type) || isVariantType(type) || isAnyType(type) || isReferenceWrapperType(type)) {
+      this.uninitialized.delete(address);
+      this.memory.fill(address, 0, Math.max(type.size, 1));
+      this.record(binding, declaration.start);
     }
 
     if (declaration.structuredBindings) {
@@ -1285,6 +1297,51 @@ class Interpreter {
       return;
     }
 
+    if (isOptionalType(binding.type)) {
+      const elemType = binding.type.element ?? intType();
+      if (initializer.kind === 'init-list' && initializer.items.length === 0) {
+        this.memory.fill(binding.address, 0, Math.max(binding.type.size, 1));
+        return;
+      }
+      const valExpr = initializer.kind === 'init-list' && initializer.items[0] ? initializer.items[0] : initializer;
+      const evaluated = this.evaluate(valExpr);
+      if (isOptionalType(evaluated.type) && evaluated.kind === 'aggregate') {
+        this.memory.copy(evaluated.address, binding.address, Math.max(binding.type.size, 1));
+        return;
+      }
+      this.memory.writeUint8(binding.address, 1);
+      const converted = this.valueForType(elemType, evaluated);
+      this.store(elemType, binding.address + 8, converted);
+      return;
+    }
+
+    if (isVariantType(binding.type)) {
+      const valExpr = initializer.kind === 'init-list' && initializer.items[0] ? initializer.items[0] : initializer;
+      const evaluated = this.evaluate(valExpr);
+      this.variants.set(binding.address, evaluated);
+      return;
+    }
+
+    if (isAnyType(binding.type)) {
+      const valExpr = initializer.kind === 'init-list' && initializer.items[0] ? initializer.items[0] : initializer;
+      const evaluated = this.evaluate(valExpr);
+      this.anyValues.set(binding.address, evaluated);
+      return;
+    }
+
+    if (isReferenceWrapperType(binding.type)) {
+      const evaluated = this.evaluate(initializer);
+      if (evaluated.kind === 'aggregate' && isReferenceWrapperType(evaluated.type)) {
+        this.memory.copy(evaluated.address, binding.address, 8);
+      } else {
+        const target = this.lvalue(initializer);
+        if (target) {
+          this.memory.writeUint64(binding.address, target.address);
+        }
+      }
+      return;
+    }
+
     if (initializer.kind === 'init-list') {
       // `int x{};` value-initializes to zero.
       if (initializer.items.length === 0) {
@@ -1342,6 +1399,20 @@ class Interpreter {
     if (first) this.store(type, address, convertTo(type, this.evaluate(first)));
   }
 
+  /**
+   * @brief Evaluates whether a runtime value is truthy in boolean contexts.
+   * @details Specializes std::optional truthiness by checking its presence flag,
+   * falling back to standard scalar/pointer toBoolean check for all other values.
+   * @param value The runtime value to check.
+   * @return True if the value evaluates to true in conditional contexts.
+   */
+  private isTruthy(value: Value): boolean {
+    if (value.kind === 'aggregate' && isOptionalType(value.type)) {
+      return this.memory.readUint8(value.address) !== 0;
+    }
+    return toBoolean(value);
+  }
+
   // ------------------------------------------------------------ statements
 
   private executeStatement(statement: Statement): void {
@@ -1374,14 +1445,14 @@ class Interpreter {
       case 'empty':
         return;
       case 'if':
-        if (toBoolean(this.evaluate(statement.condition))) this.executeStatement(statement.thenBranch);
+        if (this.isTruthy(this.evaluate(statement.condition))) this.executeStatement(statement.thenBranch);
         else if (statement.elseBranch) this.executeStatement(statement.elseBranch);
         return;
       case 'while':
         // Each loop counts its own iterations from 1 (reset per execution, so a
         // recursive call does not continue the caller's numbering).
         this.iterationCounters.set(statement.start.offset, 0);
-        while (toBoolean(this.evaluate(statement.condition))) {
+        while (this.isTruthy(this.evaluate(statement.condition))) {
           this.tick();
           const lines = this.beginIteration();
           let breaking = false;
@@ -1431,7 +1502,7 @@ class Interpreter {
             break;
           }
           this.endIteration(statement, lines);
-          if (!toBoolean(this.evaluate(statement.condition))) break;
+          if (!this.isTruthy(this.evaluate(statement.condition))) break;
         }
         return;
       case 'for':
@@ -1528,7 +1599,7 @@ class Interpreter {
       this.iterationCounters.set(statement.start.offset, 0);
       for (;;) {
         this.tick();
-        if (statement.condition && !toBoolean(this.evaluate(statement.condition))) break;
+        if (statement.condition && !this.isTruthy(this.evaluate(statement.condition))) break;
 
         const lines = this.beginIteration();
         let breaking = false;
@@ -1745,7 +1816,7 @@ class Interpreter {
         return convertTo(type, this.evaluate(expression.value));
       }
       case 'ternary':
-        return toBoolean(this.evaluate(expression.condition))
+        return this.isTruthy(this.evaluate(expression.condition))
           ? this.evaluate(expression.thenBranch)
           : this.evaluate(expression.elseBranch);
       case 'comma': {
@@ -1862,6 +1933,16 @@ class Interpreter {
 
     if (name === 'NULL' || name === 'nullptr') return pointerValue(VOID_TYPE, 0);
 
+    const placeholderMatch = /^(?:std::)?placeholders::_(\d+)$/.exec(name);
+    if (placeholderMatch) {
+      const idx = parseInt(placeholderMatch[1] ?? '1', 10);
+      return {
+        kind: 'int',
+        type: { kind: 'int', name: 'std::placeholder', size: 4, signed: true, bits: 32 },
+        value: idx,
+      };
+    }
+
     const binding = this.lookup(name);
     if (binding) {
       // A reference reads through to its referent: `value` in `void bump(int& value)`
@@ -1905,12 +1986,12 @@ class Interpreter {
     const operator = expression.operator;
 
     if (operator === '&&') {
-      if (!toBoolean(this.evaluate(expression.left))) return intValue(intType(), 0);
-      return intValue(intType(), toBoolean(this.evaluate(expression.right)) ? 1 : 0);
+      if (!this.isTruthy(this.evaluate(expression.left))) return intValue(intType(), 0);
+      return intValue(intType(), this.isTruthy(this.evaluate(expression.right)) ? 1 : 0);
     }
     if (operator === '||') {
-      if (toBoolean(this.evaluate(expression.left))) return intValue(intType(), 1);
-      return intValue(intType(), toBoolean(this.evaluate(expression.right)) ? 1 : 0);
+      if (this.isTruthy(this.evaluate(expression.left))) return intValue(intType(), 1);
+      return intValue(intType(), this.isTruthy(this.evaluate(expression.right)) ? 1 : 0);
     }
 
     if (operator === '<<' || operator === '>>') {
@@ -2113,7 +2194,14 @@ class Interpreter {
     }
 
     if (operator === '*' || operator === '->') {
-      const pointer = this.decay(this.evaluate(expression.operand));
+      const raw = this.evaluate(expression.operand);
+      if (raw.kind === 'aggregate' && isOptionalType(raw.type)) {
+        const hasVal = this.memory.readUint8(raw.address) !== 0;
+        if (!hasVal) throw new RuntimeFault('bad optional access', expression.start);
+        const elemType = raw.type.element ?? intType();
+        return this.load(elemType, raw.address + 8);
+      }
+      const pointer = this.decay(raw);
       const address = toPointerAddress(pointer);
       const pointee = pointer.type.pointee ?? pointer.type.element ?? UNKNOWN_TYPE;
       if (address === null) {
@@ -2147,6 +2235,10 @@ class Interpreter {
       return current;
     }
 
+    if (operator === '!') {
+      return intValue(intType(), this.isTruthy(this.evaluate(expression.operand)) ? 0 : 1);
+    }
+
     const value = this.decay(this.evaluate(expression.operand));
     switch (operator) {
       case '-':
@@ -2155,8 +2247,6 @@ class Interpreter {
           : intValue(promoteInteger(value.type, value.type), -toNumber(value));
       case '+':
         return value;
-      case '!':
-        return intValue(intType(), toBoolean(value) ? 0 : 1);
       case '~':
         return intValue(intType(), ~Math.trunc(toNumber(value)));
       default:
@@ -2620,13 +2710,20 @@ class Interpreter {
     if (expression.arrow) {
       const evaluated = this.evaluate(expression.object);
       if (isRegexIteratorType(evaluated.type)) return null;
-      const pointer = this.decay(evaluated);
-      const address = toPointerAddress(pointer);
-      if (address === null || address === 0) {
-        throw new RuntimeFault('null pointer dereference', expression.start);
+      if (evaluated.kind === 'aggregate' && isOptionalType(evaluated.type)) {
+        const hasVal = this.memory.readUint8(evaluated.address) !== 0;
+        if (!hasVal) throw new RuntimeFault('bad optional access', expression.start);
+        baseAddress = evaluated.address + 8;
+        baseType = evaluated.type.element ?? UNKNOWN_TYPE;
+      } else {
+        const pointer = this.decay(evaluated);
+        const address = toPointerAddress(pointer);
+        if (address === null || address === 0) {
+          throw new RuntimeFault('null pointer dereference', expression.start);
+        }
+        baseAddress = address;
+        baseType = pointer.type.pointee ?? UNKNOWN_TYPE;
       }
-      baseAddress = address;
-      baseType = pointer.type.pointee ?? UNKNOWN_TYPE;
     } else {
       const aggregate = this.evaluate(expression.object);
       if (aggregate.kind !== 'aggregate') {
@@ -2814,6 +2911,21 @@ class Interpreter {
     const value = this.evaluate(callee);
     const address = toPointerAddress(value);
     if (value.kind === 'pointer' && address !== null && address > 0) {
+      const bound = this.boundCallables.get(address);
+      if (bound) {
+        const callArgs = expression.args.map((arg) => this.evaluateRaw(arg));
+        const finalArgs: Value[] = [];
+        for (const bArg of bound.boundArgs) {
+          if (bArg.type.name === 'std::placeholder') {
+            const pIndex = bArg.kind === 'int' ? bArg.value - 1 : 0;
+            finalArgs.push(callArgs[pIndex] ?? intValue(intType(), 0));
+          } else {
+            finalArgs.push(bArg);
+          }
+        }
+        return this.invokeCallable(bound.target, finalArgs, expression.start);
+      }
+
       // A lambda or a `std::function` holding one: the address is a closure.
       const closure = this.closures.get(address);
       if (closure) {
@@ -3948,6 +4060,25 @@ class Interpreter {
       if (value.type.kind === 'array' && value.type.element?.kind === 'char') {
         return this.memory.readCString(value.address, 1 << 16);
       }
+      if (isOptionalType(value.type)) {
+        const hasVal = this.memory.readUint8(value.address) !== 0;
+        if (!hasVal) return 'nullopt';
+        const elemType = value.type.element ?? intType();
+        return this.plainText(this.load(elemType, value.address + 8));
+      }
+      if (isVariantType(value.type)) {
+        const held = this.variants.get(value.address);
+        return held ? this.plainText(held) : '';
+      }
+      if (isAnyType(value.type)) {
+        const held = this.anyValues.get(value.address);
+        return held ? this.plainText(held) : '';
+      }
+      if (isReferenceWrapperType(value.type)) {
+        const ptr = this.memory.readUint64(value.address);
+        const elemType = value.type.element ?? intType();
+        return this.plainText(this.load(elemType, ptr));
+      }
     }
     if (value.kind === 'int' && value.type.kind === 'char') {
       return String.fromCharCode(value.value & 0xff);
@@ -4564,6 +4695,46 @@ class Interpreter {
       }
     }
 
+    if (object.kind === 'aggregate' && isOptionalType(object.type)) {
+      const address = object.address;
+      const elemType = object.type.element ?? intType();
+      const hasValue = this.memory.readUint8(address) !== 0;
+
+      const argumentAt = (index: number): Value =>
+        args[index] ? this.evaluateRaw(args[index] as Expression) : intValue(intType(), 0);
+
+      switch (property) {
+        case 'has_value':
+          return intValue(boolType(), hasValue ? 1 : 0);
+        case 'value':
+          if (!hasValue) {
+            throw new RuntimeFault('bad optional access', position);
+          }
+          return this.load(elemType, address + 8);
+        case 'value_or':
+          if (hasValue) {
+            return this.load(elemType, address + 8);
+          }
+          return argumentAt(0);
+        case 'reset':
+          this.memory.writeUint8(address, 0);
+          return voidValue();
+        default:
+          throw new RuntimeFault(`std::optional has no member '${property}'`, position);
+      }
+    }
+
+    if (object.kind === 'aggregate' && isReferenceWrapperType(object.type)) {
+      const elemType = object.type.element ?? intType();
+      const ptr = this.memory.readUint64(object.address);
+      switch (property) {
+        case 'get':
+          return this.load(elemType, ptr);
+        default:
+          throw new RuntimeFault(`std::reference_wrapper has no member '${property}'`, position);
+      }
+    }
+
     return undefined;
   }
 
@@ -4586,6 +4757,7 @@ class Interpreter {
       'partition', 'unique', 'copy',
       'partial_sum', 'adjacent_difference', 'inner_product',
       'gcd', 'lcm', 'back_inserter', 'make_pair',
+      'get', 'any_cast', 'ref', 'bind',
     ]);
     if (!name.startsWith('std::') && !supported.has(base)) return undefined;
     if (!supported.has(base)) return undefined;
@@ -5043,6 +5215,50 @@ class Interpreter {
         const lcmVal = Math.trunc((rawA / a) * rawB);
         return intValue(intType(), lcmVal);
       }
+      case 'get': {
+        const arg = argumentAt(0);
+        if (arg.kind === 'aggregate') {
+          if (isVariantType(arg.type)) {
+            return this.variants.get(arg.address) ?? voidValue();
+          }
+          if (isPairType(arg.type)) {
+            return this.load(arg.type.members?.[0]?.type ?? intType(), arg.address);
+          }
+          if (arg.type.name.startsWith('std::tuple<')) {
+            return this.load(arg.type.members?.[0]?.type ?? intType(), arg.address);
+          }
+        }
+        return arg;
+      }
+      case 'any_cast': {
+        const arg = argumentAt(0);
+        if (arg.kind === 'aggregate' && isAnyType(arg.type)) {
+          return this.anyValues.get(arg.address) ?? voidValue();
+        }
+        return arg;
+      }
+      case 'ref': {
+        const target = args[0] ? this.lvalue(args[0]) : null;
+        if (!target) throw new RuntimeFault('std::ref requires an lvalue', position);
+        const refType = referenceWrapperType(target.type);
+        const addr = this.allocateFor(refType);
+        this.memory.writeUint64(addr, target.address);
+        return { kind: 'aggregate', type: refType, address: addr };
+      }
+      case 'bind': {
+        const target = argumentAt(0);
+        const boundArgs: Value[] = [];
+        for (let i = 1; i < args.length; i++) {
+          boundArgs.push(this.evaluate(args[i]!));
+        }
+        const addr = this.memory.alloc(8, 8);
+        this.boundCallables.set(addr, { target, boundArgs });
+        return {
+          kind: 'pointer',
+          type: { kind: 'pointer', name: 'std::bind_t', size: 8, signed: false, bits: 64, pointee: VOID_TYPE },
+          address: addr,
+        };
+      }
       default:
         return undefined;
     }
@@ -5264,6 +5480,39 @@ class Interpreter {
       return;
     }
 
+    if (isOptionalType(type)) {
+      if (isOptionalType(value.type) && value.kind === 'aggregate') {
+        this.memory.copy(value.address, address, Math.max(type.size, 1));
+        return;
+      }
+      this.memory.writeUint8(address, 1);
+      const elemType = type.element ?? intType();
+      this.store(elemType, address + 8, this.valueForType(elemType, value));
+      return;
+    }
+
+    if (isVariantType(type)) {
+      this.variants.set(address, value);
+      return;
+    }
+
+    if (isAnyType(type)) {
+      this.anyValues.set(address, value);
+      return;
+    }
+
+    if (isReferenceWrapperType(type)) {
+      if (isReferenceWrapperType(value.type) && value.kind === 'aggregate') {
+        this.memory.copy(value.address, address, 8);
+        return;
+      }
+      const ptr = toPointerAddress(value);
+      if (ptr !== null) {
+        this.memory.writeUint64(address, ptr);
+      }
+      return;
+    }
+
     switch (type.kind) {
       case 'bool':
         this.memory.writeUint8(address, toNumber(value) !== 0 ? 1 : 0);
@@ -5468,11 +5717,26 @@ class Interpreter {
         return this.memberTarget(expression);
       case 'unary': {
         if (expression.operator !== '*') return null;
-        const pointer = this.decay(this.evaluate(expression.operand));
+        const raw = this.evaluate(expression.operand);
+        if (raw.kind === 'aggregate' && isOptionalType(raw.type)) {
+          const elemType = raw.type.element ?? intType();
+          return { address: raw.address + 8, type: elemType };
+        }
+        const pointer = this.decay(raw);
         const address = toPointerAddress(pointer);
         const pointee = pointer.type.pointee ?? UNKNOWN_TYPE;
         if (address === null) return null;
         return { address, type: pointee };
+      }
+      case 'call': {
+        if (expression.callee.kind === 'member' && expression.callee.property === 'get') {
+          const obj = this.evaluate(expression.callee.object);
+          if (obj.kind === 'aggregate' && isReferenceWrapperType(obj.type)) {
+            const ptr = this.memory.readUint64(obj.address);
+            return { address: ptr, type: obj.type.element ?? intType() };
+          }
+        }
+        return null;
       }
       default:
         return null;
