@@ -675,7 +675,7 @@ int main() {
     const exec = execute(analysis.unit);
     if (exec.status !== 'ok') {
       console.log('SEQUENTIAL DIAGNOSTICS:', exec.diagnostics);
-      console.log('SEQUENTIAL ERROR:', exec.error);
+      console.log('SEQUENTIAL DETAIL:', exec.detail);
     }
     expect(exec.status).toBe('ok');
     expect(exec.stdout).toContain('Number: 20');
