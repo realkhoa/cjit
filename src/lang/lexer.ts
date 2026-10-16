@@ -318,20 +318,42 @@ export function lex(source: string, file: string): LexResult {
         continue;
       }
 
-      if (text === 'R' && after === 34) {
-        // C++ raw string: not supported by the fast engine, skip to ')"' or EOF.
-        const close = source.indexOf(')"', cursor);
-        index = close === -1 ? source.length : close + 2;
+      if (
+        (text === 'R' || text === 'u8R' || text === 'LR' || text === 'uR' || text === 'UR') &&
+        after === 34
+      ) {
+        // C++ raw string: R"delimiter(content)delimiter"
+        const delimCursor = cursor + 1;
+        const parenIndex = source.indexOf('(', delimCursor);
+        if (parenIndex !== -1 && parenIndex - delimCursor <= 16) {
+          const delimiter = source.slice(delimCursor, parenIndex);
+          const contentStart = parenIndex + 1;
+          const closingPattern = `)${delimiter}"`;
+          const closeIndex = source.indexOf(closingPattern, contentStart);
+          if (closeIndex !== -1) {
+            index = closeIndex + closingPattern.length;
+            syncLines(startOffset, index);
+            const content = source.slice(contentStart, closeIndex);
+            emit('string', startOffset, start, content);
+            diagnostics.push(
+              makeDiagnostic(
+                'warning',
+                'C++ raw string literals are not supported by the fast engine (Run uses clang-wasm)',
+                file,
+                start,
+                here(),
+              ),
+            );
+            continue;
+          }
+        }
+        // Fallback for unterminated raw string literal
+        const fallbackClose = source.indexOf(')"', cursor);
+        index = fallbackClose === -1 ? source.length : fallbackClose + 2;
         syncLines(startOffset, index);
         emit('string', startOffset, start, '');
         diagnostics.push(
-          makeDiagnostic(
-            'warning',
-            'C++ raw string literals are not supported by the fast engine (Run uses clang-wasm)',
-            file,
-            start,
-            here(),
-          ),
+          makeDiagnostic('error', 'unterminated raw string literal', file, start, here()),
         );
         continue;
       }

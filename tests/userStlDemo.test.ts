@@ -478,6 +478,20 @@ describe('user STL demo analysis', () => {
   it('parses the entire user STL demo code with zero syntax errors in fast engine', () => {
     const result = analyzeSource(USER_CODE, 'main.cpp');
     expect(result.errorCount).toBe(0);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.severity).toBe('warning');
+    expect(result.diagnostics[0]?.message).toContain('C++ raw string literals are not supported by the fast engine (Run uses clang-wasm)');
+  });
+
+  it('parses C++ raw string literals with custom delimiters into string tokens with warning', () => {
+    const code = `using namespace std;
+void f() {
+    regex r(R"(\\d+)");
+    string custom = R"xyz(hello "world" (123))xyz";
+}`;
+    const result = analyzeSource(code, 'main.cpp');
+    expect(result.errorCount).toBe(0);
+    expect(result.diagnostics.every((d) => d.severity === 'warning')).toBe(true);
   });
 
   it('parses nested templates with closing >> correctly', () => {
