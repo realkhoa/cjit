@@ -1595,14 +1595,13 @@ class Parser {
     const keyword = this.advance();
     this.expect('(', "expected '(' after for");
 
-    let initializer: Statement | Declaration | undefined;
+    let initializer: Statement | Declaration | readonly Declaration[] | undefined;
 
     if (!this.check(';')) {
       if (this.isDeclarationStart()) {
         const declarations = this.parseDeclarationList(false);
         const declaration = declarations[0];
         if (declaration) {
-          initializer = declaration;
           if (this.check(':')) {
             // Range-based for: a first-class statement, executed by the engine.
             this.advance();
@@ -1618,6 +1617,7 @@ class Parser {
               end: body.end,
             };
           }
+          initializer = declarations.length === 1 ? declaration : declarations;
         }
       } else {
         const expression = this.parseExpression();

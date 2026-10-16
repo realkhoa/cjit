@@ -330,7 +330,7 @@ export interface IfStmt extends Node {
 
 export interface ForStmt extends Node {
   readonly kind: 'for';
-  readonly initializer?: Statement | Declaration;
+  readonly initializer?: Statement | Declaration | readonly Declaration[];
   readonly condition?: Expression;
   readonly increment?: Expression;
   readonly body: Statement;

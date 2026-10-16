@@ -28,6 +28,8 @@ import {
   isPointerType,
   isPairType,
   pairType,
+  isRegexIteratorType,
+  isRegexType,
   isStreamBuffer,
   isStringType,
   isVectorType,
@@ -508,6 +510,7 @@ class Interpreter {
     }
   >();
   private closureSeq = 0;
+  private readonly regexIterators = new Map<number, { matches: string[]; index: number }>();
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -1149,6 +1152,14 @@ class Interpreter {
       this.uninitialized.delete(address);
       this.createString(address, '');
       this.record(binding, declaration.start);
+    } else if (isRegexType(type)) {
+      this.uninitialized.delete(address);
+      this.createString(address, '');
+      this.record(binding, declaration.start);
+    } else if (isRegexIteratorType(type)) {
+      this.uninitialized.delete(address);
+      this.regexIterators.set(address, { matches: [], index: 0 });
+      this.record(binding, declaration.start);
     }
 
     if (declaration.structuredBindings) {
@@ -1213,6 +1224,52 @@ class Interpreter {
             : this.readStringValue(value);
       }
       this.createString(binding.address, text);
+      return;
+    }
+
+    if (isRegexType(binding.type)) {
+      let pattern = '';
+      if (initializer.kind === 'literal' && initializer.literal === 'string') {
+        pattern = initializer.value ?? '';
+      } else if (initializer.kind === 'init-list') {
+        pattern = initializer.items.map((item) => this.readStringValue(this.evaluate(item))).join('');
+      } else {
+        const val = this.evaluate(initializer);
+        pattern =
+          val.kind === 'aggregate' && isStringType(val.type)
+            ? this.stringText(val.address)
+            : this.readStringValue(val);
+      }
+      this.createString(binding.address, pattern);
+      return;
+    }
+
+    if (isRegexIteratorType(binding.type)) {
+      if (initializer.kind === 'init-list' && initializer.items.length >= 3) {
+        const first = this.evaluate(initializer.items[0]!);
+        const last = this.evaluate(initializer.items[1]!);
+        const regexArg = this.evaluate(initializer.items[2]!);
+        let inputStr = '';
+        if (first.kind === 'pointer' && last.kind === 'pointer' && last.address >= first.address) {
+          const len = last.address - first.address;
+          inputStr = this.memory.readCString(first.address, len);
+        }
+        let pattern = '';
+        if (regexArg.kind === 'aggregate') {
+          pattern = this.stringText(regexArg.address);
+        }
+        let matches: string[] = [];
+        try {
+          const re = new RegExp(pattern, 'g');
+          const m = Array.from(inputStr.matchAll(re), (res) => res[0]);
+          matches = m;
+        } catch {
+          matches = [];
+        }
+        this.regexIterators.set(binding.address, { matches, index: 0 });
+      } else {
+        this.regexIterators.set(binding.address, { matches: [], index: 0 });
+      }
       return;
     }
 
@@ -1452,11 +1509,19 @@ class Interpreter {
     try {
       const initializer = statement.initializer;
       if (initializer) {
-        if (isDeclarationKind(initializer.kind)) {
-          this.executeDeclaration(initializer as Declaration);
-          this.recordLine(initializer.start.line);
+        if (Array.isArray(initializer)) {
+          for (const decl of initializer) {
+            this.executeDeclaration(decl);
+            this.recordLine(decl.start.line);
+          }
         } else {
-          this.executeStatement(initializer as Statement);
+          const single = initializer as Statement | Declaration;
+          if (isDeclarationKind(single.kind)) {
+            this.executeDeclaration(single as Declaration);
+            this.recordLine(single.start.line);
+          } else {
+            this.executeStatement(single as Statement);
+          }
         }
       }
 
@@ -2012,6 +2077,15 @@ class Interpreter {
   }
 
   private compare(left: Value, right: Value): number {
+    if (isRegexIteratorType(left.type) || isRegexIteratorType(right.type)) {
+      const leftIter = this.regexIterators.get(left.kind === 'aggregate' || left.kind === 'pointer' ? left.address : 0);
+      const rightIter = this.regexIterators.get(right.kind === 'aggregate' || right.kind === 'pointer' ? right.address : 0);
+      const leftAtEnd = !leftIter || leftIter.index >= leftIter.matches.length;
+      const rightAtEnd = !rightIter || rightIter.index >= rightIter.matches.length;
+      if (leftAtEnd && rightAtEnd) return 0;
+      if (leftAtEnd !== rightAtEnd) return -1;
+      return leftIter!.index === rightIter!.index ? 0 : leftIter!.index < rightIter!.index ? -1 : 1;
+    }
     if (isFloatType(left.type) || isFloatType(right.type)) {
       return toNumber(left) === toNumber(right) ? 0 : toNumber(left) < toNumber(right) ? -1 : 1;
     }
@@ -2054,6 +2128,14 @@ class Interpreter {
     if (operator === '++' || operator === '--') {
       const target = this.lvalue(expression.operand);
       if (!target) throw new RuntimeFault(`cannot ${operator === '++' ? 'increment' : 'decrement'} this expression`, expression.start);
+      if (isRegexIteratorType(target.type)) {
+        const iter = this.regexIterators.get(target.address);
+        if (iter) {
+          if (operator === '++') iter.index += 1;
+          else if (iter.index > 0) iter.index -= 1;
+        }
+        return { kind: 'aggregate', type: target.type, address: target.address };
+      }
       const current = this.load(target.type, target.address);
       const step = isPointerType(target.type) ? Math.max(target.type.pointee?.size ?? 1, 1) : 1;
       const next = convertTo(
@@ -2403,7 +2485,9 @@ class Interpreter {
     let baseType: CType;
 
     if (callee.arrow) {
-      const pointer = this.decay(this.evaluate(callee.object));
+      const evaluated = this.evaluate(callee.object);
+      if (isRegexIteratorType(evaluated.type)) return null;
+      const pointer = this.decay(evaluated);
       const address = toPointerAddress(pointer);
       if (address === null || address === 0) {
         throw new RuntimeFault('null pointer dereference', callee.start);
@@ -2534,7 +2618,9 @@ class Interpreter {
     let baseType: CType;
 
     if (expression.arrow) {
-      const pointer = this.decay(this.evaluate(expression.object));
+      const evaluated = this.evaluate(expression.object);
+      if (isRegexIteratorType(evaluated.type)) return null;
+      const pointer = this.decay(evaluated);
       const address = toPointerAddress(pointer);
       if (address === null || address === 0) {
         throw new RuntimeFault('null pointer dereference', expression.start);
@@ -4424,12 +4510,36 @@ class Interpreter {
         }
         case 'find':
           return intValue(longType(), text.indexOf(this.plainText(argumentAt(0))));
+        case 'rfind': {
+          const needle = this.plainText(argumentAt(0));
+          const from = args[1] !== undefined ? Math.trunc(toNumber(argumentAt(1))) : text.length;
+          const idx = text.lastIndexOf(needle, from);
+          return intValue(longType(), idx === -1 ? -1 : idx);
+        }
         case 'compare': {
+          if (args.length >= 3) {
+            const pos = Math.trunc(toNumber(argumentAt(0)));
+            const count = Math.trunc(toNumber(argumentAt(1)));
+            const other = this.plainText(argumentAt(2));
+            const sub = text.slice(pos, pos + count);
+            return intValue(intType(), sub < other ? -1 : sub > other ? 1 : 0);
+          }
           const other = this.plainText(argumentAt(0));
           return intValue(intType(), text < other ? -1 : text > other ? 1 : 0);
         }
         default:
           throw new RuntimeFault(`std::string has no member '${property}'`, position);
+      }
+    }
+
+    if (object.kind === 'aggregate' && isRegexIteratorType(object.type)) {
+      const iter = this.regexIterators.get(object.address);
+      const current = (iter && iter.index < iter.matches.length ? iter.matches[iter.index] : '') ?? '';
+      switch (property) {
+        case 'str':
+          return this.makeString(current);
+        default:
+          throw new RuntimeFault(`std::sregex_iterator has no member '${property}'`, position);
       }
     }
 

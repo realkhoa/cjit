@@ -616,4 +616,46 @@ int main() {
     expect(exec.status).toBe('ok');
     expect(exec.stdout).toContain('Bob 25 88.5');
   });
+
+  it('supports multiple declarators in for loop initializer', () => {
+    const code = `using namespace std;
+int main() {
+    int sum = 0;
+    for (int i = 0, j = 10; i < 5; ++i, j += 2) {
+        sum += i + j;
+    }
+    cout << sum << '\\n';
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toBe('80\n');
+  });
+
+  it('executes demoStrings without undeclared identifier fault', () => {
+    const demoStringsSrc = USER_CODE.slice(
+      USER_CODE.indexOf('void demoStrings()'),
+      USER_CODE.indexOf('void demoUtilities()'),
+    );
+    const code = `using namespace std;
+${demoStringsSrc}
+int main() {
+    demoStrings();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Text: Modern C++ STL');
+    expect(exec.stdout).toContain('Length: 14');
+    expect(exec.stdout).toContain('Substring: C++');
+    expect(exec.stdout).toContain('Age=25, Score=95.5');
+    expect(exec.stdout).toContain('Number: 20');
+    expect(exec.stdout).toContain('Number: 2026');
+    expect(exec.stdout).toContain('Starts with Modern: true');
+    expect(exec.stdout).toContain('Ends with STL: true');
+  });
 });

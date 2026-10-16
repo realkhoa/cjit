@@ -244,10 +244,21 @@ export function buildSymbolTable(
           end: statement.end.offset,
         };
         const initializer = statement.initializer;
-        if (initializer && isDeclarationItem(initializer)) {
-          handleDeclaration(initializer, loop);
-        } else if (initializer && initializer.kind === 'expr-stmt') {
-          visitStatement(initializer, ctx);
+        if (initializer) {
+          if (Array.isArray(initializer)) {
+            for (const decl of initializer) {
+              if (isDeclarationItem(decl)) {
+                handleDeclaration(decl, loop);
+              }
+            }
+          } else {
+            const single = initializer as Statement | Declaration;
+            if (isDeclarationItem(single)) {
+              handleDeclaration(single, loop);
+            } else if (single.kind === 'expr-stmt') {
+              visitStatement(single, ctx);
+            }
+          }
         }
         visitStatement(statement.body, loop);
         return;

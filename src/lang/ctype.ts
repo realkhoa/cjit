@@ -483,8 +483,37 @@ export function splitTemplateArguments(text: string): string[] {
   return parts;
 }
 
+/**
+ * @brief Checks if a CType represents a std::string or std::string_view.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents a string or string_view, false otherwise.
+ */
 export function isStringType(type: CType): boolean {
-  return type.kind === 'struct' && type.name === 'std::string';
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::string' ||
+      type.name === 'string' ||
+      type.name === 'std::string_view' ||
+      type.name === 'string_view')
+  );
+}
+
+/**
+ * @brief Checks if a CType represents a std::regex object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents std::regex or regex, false otherwise.
+ */
+export function isRegexType(type: CType): boolean {
+  return type.name === 'std::regex' || type.name === 'regex';
+}
+
+/**
+ * @brief Checks if a CType represents a std::sregex_iterator object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents std::sregex_iterator or sregex_iterator, false otherwise.
+ */
+export function isRegexIteratorType(type: CType): boolean {
+  return type.name === 'std::sregex_iterator' || type.name === 'sregex_iterator';
 }
 
 /**
@@ -985,6 +1014,15 @@ export class TypeResolver {
     }
 
     if (name === 'std::string' || name === 'string') return stringType();
+    if (name === 'std::string_view' || name === 'string_view') {
+      return { ...stringType(), name: 'std::string_view' };
+    }
+    if (name === 'std::regex' || name === 'regex') {
+      return { kind: 'struct', name: 'std::regex', size: 16, signed: false, bits: 128 };
+    }
+    if (name === 'std::sregex_iterator' || name === 'sregex_iterator') {
+      return { kind: 'struct', name: 'std::sregex_iterator', size: 24, signed: false, bits: 192 };
+    }
     // A string stream is the same buffer as a string, under another name.
     if (
       name === 'std::ostringstream' ||
