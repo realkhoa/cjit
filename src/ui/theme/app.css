@@ -1761,20 +1761,78 @@ button {
   gap: 4px;
 }
 
+.btn--copy-console {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--vs-accent);
+  color: #fff;
+  border-color: var(--vs-accent);
+  font-weight: 500;
+}
+
+.btn--copy-console:hover {
+  filter: brightness(1.1);
+}
+
+.problems__raw-wrapper {
+  margin: 6px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.problems__raw-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--vs-text-muted);
+}
+
+.problems__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--vs-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vs-text);
+  background: var(--vs-editor-bg);
+  border: 1px solid var(--vs-border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  resize: vertical;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  user-select: text;
+  cursor: text;
+}
+
+.problems__textarea:focus {
+  outline: none;
+  border-color: var(--vs-accent);
+}
+
+.problems__list {
+  display: flex;
+  flex-direction: column;
+}
+
 .problem {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   width: 100%;
-  padding: 3px 10px;
+  padding: 4px 10px;
   border: none;
   background: transparent;
-  cursor: pointer;
   text-align: left;
   font-family: var(--vs-font-mono);
   font-size: 12px;
   user-select: text;
+  cursor: default;
 }
 
 .problem:hover {
@@ -1787,35 +1845,68 @@ button {
   flex: 1 1 auto;
   min-width: 0;
   align-items: baseline;
+  user-select: text;
+  cursor: text;
+}
+
+.problem__jump-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--vs-text-muted);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.problem__jump-btn:hover {
+  color: var(--vs-accent);
 }
 
 .problem__seat {
   flex: 0 0 auto;
   color: var(--vs-text-muted);
+  text-transform: uppercase;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.problem--error .problem__seat {
+  color: var(--vs-error);
+}
+
+.problem--warning .problem__seat {
+  color: var(--vs-warning);
 }
 
 .problem__msg {
   flex: 1 1 auto;
   color: var(--vs-text);
   word-break: break-word;
+  user-select: text;
+  cursor: text;
 }
 
 .problem--error .problem__msg {
-  color: var(--vs-error);
+  color: var(--vs-text);
 }
 
 .problem--warning .problem__msg {
-  color: var(--vs-warning);
+  color: var(--vs-text);
 }
 
 .problem__copy-btn {
   flex: 0 0 auto;
-  opacity: 0;
-  background: transparent;
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--vs-border);
   border-radius: 3px;
   color: var(--vs-text-muted);
-  padding: 1px 6px;
+  padding: 2px 8px;
   font-size: 11px;
   cursor: pointer;
   transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
@@ -1823,11 +1914,9 @@ button {
 
 .problem:hover .problem__copy-btn,
 .problem:focus-within .problem__copy-btn,
+.problem__copy-btn:hover,
 .problem__copy-btn:focus {
   opacity: 1;
-}
-
-.problem__copy-btn:hover {
   background: var(--vs-hover);
   color: var(--vs-text);
   border-color: var(--vs-accent);
@@ -1835,7 +1924,7 @@ button {
 
 @media (hover: none) and (pointer: coarse) {
   .problem__copy-btn {
-    opacity: 0.8;
+    opacity: 1;
   }
 }
 

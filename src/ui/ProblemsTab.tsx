@@ -71,23 +71,20 @@ interface ProblemItemProps {
  */
 function ProblemItem(props: ProblemItemProps) {
   const { diagnostic, index, isCopied, onCopySingle } = props;
+  const locationLabel = `${diagnostic.source}:${diagnostic.startLine}:${diagnostic.startColumn}`;
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      className={`problem problem--${diagnostic.severity}`}
-      onClick={() => revealPosition(diagnostic.startLine, diagnostic.startColumn)}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          revealPosition(diagnostic.startLine, diagnostic.startColumn);
-        }
-      }}
-    >
+    <div className={`problem problem--${diagnostic.severity}`}>
       <div className="problem__content">
+        <button
+          type="button"
+          className="problem__jump-btn"
+          onClick={() => revealPosition(diagnostic.startLine, diagnostic.startColumn)}
+          title={`Nhảy tới dòng ${diagnostic.startLine}:${diagnostic.startColumn} trong code`}
+        >
+          {locationLabel}
+        </button>
         <span className="problem__seat">
-          {diagnostic.severity === 'error' ? 'error' : diagnostic.severity} ·{' '}
-          {diagnostic.source}:{diagnostic.startLine}:{diagnostic.startColumn}
+          {diagnostic.severity === 'error' ? 'error' : diagnostic.severity}
         </span>
         <span className="problem__msg">{diagnostic.message}</span>
       </div>
@@ -96,10 +93,7 @@ function ProblemItem(props: ProblemItemProps) {
         className="problem__copy-btn"
         aria-label={`Sao chép lỗi dòng ${diagnostic.startLine}:${diagnostic.startColumn}`}
         title={`Sao chép lỗi dòng ${diagnostic.startLine}:${diagnostic.startColumn}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          onCopySingle(diagnostic, index);
-        }}
+        onClick={() => onCopySingle(diagnostic, index)}
       >
         {isCopied ? '✓' : '📋'}
       </button>
@@ -137,6 +131,37 @@ function ProblemsToolbar(props: ProblemsToolbarProps) {
   );
 }
 
+interface RawTextConsoleProps {
+  readonly rawText: string;
+  readonly lineCount: number;
+}
+
+/**
+ * @brief Renders a selectable text console for manually copying error text with mouse or keyboard.
+ * @param props Component properties containing raw formatted diagnostics text.
+ * @return The rendered textarea JSX element.
+ */
+function RawTextConsole(props: RawTextConsoleProps) {
+  const { rawText, lineCount } = props;
+  const rows = Math.min(8, Math.max(3, lineCount));
+  return (
+    <div className="problems__raw-wrapper">
+      <div className="problems__raw-label">
+        <span>Văn bản lỗi (chọn & copy tay bằng chuột / phím tắt):</span>
+      </div>
+      <textarea
+        readOnly
+        spellCheck={false}
+        className="problems__textarea"
+        value={rawText}
+        rows={rows}
+        aria-label="Văn bản chẩn đoán lỗi"
+        placeholder="Chưa có chẩn đoán lỗi."
+      />
+    </div>
+  );
+}
+
 /**
  * @brief Renders the empty state hint when there are no compilation problems.
  * @return Empty state hint JSX element.
@@ -166,7 +191,7 @@ interface ProblemsListProps {
 function ProblemsList(props: ProblemsListProps) {
   const { diagnostics, copiedIndex, onCopySingle } = props;
   return (
-    <>
+    <div className="problems__list">
       {diagnostics.map((diagnostic, index) => (
         <ProblemItem
           key={`${diagnostic.startLine}:${diagnostic.startColumn}:${index}`}
@@ -176,7 +201,42 @@ function ProblemsList(props: ProblemsListProps) {
           onCopySingle={onCopySingle}
         />
       ))}
-    </>
+    </div>
+  );
+}
+
+interface ProblemsActiveViewProps {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly rawText: string;
+  readonly copiedAll: boolean;
+  readonly copiedIndex: number | null;
+  readonly onCopyAll: () => void;
+  readonly onCopySingle: (diagnostic: Diagnostic, index: number) => void;
+}
+
+/**
+ * @brief Renders active problems tab layout with toolbar, raw text console, and list.
+ * @param props Component properties for active problems view.
+ * @return Active problems JSX element.
+ */
+function ProblemsActiveView(props: ProblemsActiveViewProps) {
+  const { diagnostics, rawText, copiedAll, copiedIndex, onCopyAll, onCopySingle } = props;
+  return (
+    <div className="console__body">
+      <div className="problems">
+        <ProblemsToolbar
+          count={diagnostics.length}
+          copiedAll={copiedAll}
+          onCopyAll={onCopyAll}
+        />
+        <RawTextConsole rawText={rawText} lineCount={diagnostics.length} />
+        <ProblemsList
+          diagnostics={diagnostics}
+          copiedIndex={copiedIndex}
+          onCopySingle={onCopySingle}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -185,7 +245,7 @@ export interface ProblemsTabProps {
 }
 
 /**
- * @brief Renders the problems tab body with toolbar and interactive diagnostics list.
+ * @brief Renders problems tab body with toolbar, selectable raw text console, and interactive list.
  * @param props Component properties containing the diagnostics array.
  * @return The rendered problems list JSX element.
  */
@@ -217,19 +277,13 @@ export function ProblemsTab(props: ProblemsTabProps) {
   }
 
   return (
-    <div className="console__body">
-      <div className="problems">
-        <ProblemsToolbar
-          count={diagnostics.length}
-          copiedAll={copiedAll}
-          onCopyAll={handleCopyAll}
-        />
-        <ProblemsList
-          diagnostics={diagnostics}
-          copiedIndex={copiedIndex}
-          onCopySingle={handleCopySingle}
-        />
-      </div>
-    </div>
+    <ProblemsActiveView
+      diagnostics={diagnostics}
+      rawText={formatDiagnosticsForClipboard(diagnostics)}
+      copiedAll={copiedAll}
+      copiedIndex={copiedIndex}
+      onCopyAll={handleCopyAll}
+      onCopySingle={handleCopySingle}
+    />
   );
 }

@@ -125,4 +125,29 @@ describe('Problems Tab Copy Button UI', () => {
     fireEvent.click(singleCopyBtns[0]!);
     expect(writeTextMock).toHaveBeenCalledWith('main.cpp:42:3: error: unknown type name "Foo"');
   });
+
+  it('renders raw textarea with all error text for manual copy', () => {
+    render(<ConsolePanel />);
+    const textarea = screen.getByRole('textbox', { name: /văn bản chẩn đoán lỗi/i }) as HTMLTextAreaElement;
+    expect(textarea).toBeTruthy();
+    expect(textarea.readOnly).toBe(true);
+    expect(textarea.value).toBe(
+      "main.cpp:42:3: error: unknown type name \"Foo\"\nmain.cpp:50:1: warning: comparison between signed and unsigned",
+    );
+  });
+
+  it('renders copy button in console header tools and copies all problems when clicked', async () => {
+    render(<ConsolePanel />);
+    const headerCopyBtn = screen.getByRole('button', { name: /sao chép danh sách lỗi/i });
+    expect(headerCopyBtn).toBeTruthy();
+
+    fireEvent.click(headerCopyBtn);
+    expect(writeTextMock).toHaveBeenCalledWith(
+      "main.cpp:42:3: error: unknown type name \"Foo\"\nmain.cpp:50:1: warning: comparison between signed and unsigned",
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/đã chép/i)).toBeTruthy();
+    });
+  });
 });

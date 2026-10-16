@@ -1,7 +1,12 @@
+import { useState } from 'react';
 import { revealPosition } from '@/editor/navigation';
-import type { MemoryView, SafetyEvent, SafetyKind } from '@/engine/types';
-import { chainEndLabel, chainSummary, formatAddress, hexDump } from '@/ui/memoryFormat';
-import { ProblemsTab } from '@/ui/ProblemsTab';
+import type { Diagnostic, MemoryView, SafetyEvent, SafetyKind } from '@/engine/types';
+import { MemoryTab } from '@/ui/MemoryTab';
+import {
+  ProblemsTab,
+  copyTextToClipboard,
+  formatDiagnosticsForClipboard,
+} from '@/ui/ProblemsTab';
 import { useAppStore } from '@/state/store';
 import type { ConsoleTab, OutputLine } from '@/state/store';
 
@@ -29,12 +34,50 @@ const SAFETY_LABELS: Readonly<Record<SafetyKind, string>> = {
   'runtime-error': 'runtime error',
 };
 
+interface ConsoleToolsProps {
+  readonly activeTab: ConsoleTab;
+  readonly diagnosticsCount: number;
+  readonly onClearOutput: () => void;
+  readonly onCopyProblems?: () => void;
+  readonly copiedProblems?: boolean;
+}
+
+/**
+ * @brief Renders the right-aligned tools in the console tab bar (copy and clear buttons).
+ * @param props Component properties for console tools.
+ * @return Rendered console tools JSX element.
+ */
+function ConsoleTools(props: ConsoleToolsProps) {
+  const { activeTab, diagnosticsCount, onClearOutput, onCopyProblems, copiedProblems } = props;
+  const showCopy = activeTab === 'problems' && diagnosticsCount > 0 && onCopyProblems;
+  return (
+    <div className="console__tools">
+      {showCopy ? (
+        <button
+          type="button"
+          className="btn btn--copy-console"
+          aria-label="Sao chép danh sách lỗi"
+          onClick={onCopyProblems}
+          title="Sao chép toàn bộ lỗi trong tab Problems"
+        >
+          {copiedProblems ? '✓ Đã chép' : '📋 Sao chép lỗi'}
+        </button>
+      ) : null}
+      <button type="button" className="btn" onClick={onClearOutput} title="Xoá output">
+        Clear
+      </button>
+    </div>
+  );
+}
+
 interface ConsoleTabsHeaderProps {
   readonly activeTab: ConsoleTab;
   readonly diagnosticsCount: number;
   readonly safetyCount: number;
   readonly onSelectTab: (tab: ConsoleTab) => void;
   readonly onClearOutput: () => void;
+  readonly onCopyProblems?: () => void;
+  readonly copiedProblems?: boolean;
 }
 
 /**
@@ -43,7 +86,15 @@ interface ConsoleTabsHeaderProps {
  * @return The rendered tabs header JSX element.
  */
 function ConsoleTabsHeader(props: ConsoleTabsHeaderProps) {
-  const { activeTab, diagnosticsCount, safetyCount, onSelectTab, onClearOutput } = props;
+  const {
+    activeTab,
+    diagnosticsCount,
+    safetyCount,
+    onSelectTab,
+    onClearOutput,
+    onCopyProblems,
+    copiedProblems,
+  } = props;
   return (
     <div className="console__tabs">
       {TABS.map((tab) => (
@@ -63,11 +114,13 @@ function ConsoleTabsHeader(props: ConsoleTabsHeaderProps) {
         </button>
       ))}
 
-      <div className="console__tools">
-        <button type="button" className="btn" onClick={onClearOutput} title="Xoá output">
-          Clear
-        </button>
-      </div>
+      <ConsoleTools
+        activeTab={activeTab}
+        diagnosticsCount={diagnosticsCount}
+        onClearOutput={onClearOutput}
+        onCopyProblems={onCopyProblems}
+        copiedProblems={copiedProblems}
+      />
     </div>
   );
 }
@@ -95,124 +148,6 @@ function StdinTab(props: StdinTabProps) {
         }
         onChange={(event) => onStdinChange(event.target.value)}
       />
-    </div>
-  );
-}
-
-/**
- * @brief Renders the empty memory state message when no structures or blocks are allocated.
- * @param props Properties containing engine label.
- * @return Empty memory hint JSX element.
- */
-function EmptyMemoryHint(props: { readonly engineLabel: string }) {
-  const { engineLabel } = props;
-  const hint = engineLabel.toLowerCase().includes('clang')
-    ? 'Engine clang không mô hình hoá memory: nó biên dịch và chạy thật, ' +
-      'còn khối nhớ nằm trong module wasm. Chuyển sang fast engine để xem cấu trúc dữ liệu.'
-    : 'Chương trình chưa cấp phát gì bằng malloc/new, ' +
-      'và không có con trỏ nào trỏ tới struct — nên chưa có gì để vẽ.';
-  return (
-    <div className="console__body">
-      <span className="console__hint">{hint}</span>
-    </div>
-  );
-}
-
-interface MemoryChainsSectionProps {
-  readonly chains: MemoryView['chains'];
-}
-
-/**
- * @brief Renders the list of tracked pointer chains.
- * @param props Properties for pointer chains.
- * @return Rendered pointer chains JSX element.
- */
-function MemoryChainsSection(props: MemoryChainsSectionProps) {
-  const { chains } = props;
-  return (
-    <>
-      {chains.map((chain) => (
-        <div key={`chain-${chain.name}`} className="memory__chain">
-          <div className="memory__title" title={chainEndLabel(chain.end)}>
-            {chainSummary(chain)}
-          </div>
-          {chain.nodes.map((node, index) => (
-            <div key={`${chain.name}-${node.address}`} className="memory__node">
-              <span className="memory__address">{formatAddress(node.address)}</span>
-              <span className="memory__fields">
-                {node.fields.map((field) => `${field.name} = ${field.value}`).join(', ')}
-              </span>
-              {index === chain.nodes.length - 1 ? (
-                <span className="memory__end">→ {chainEndLabel(chain.end)}</span>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ))}
-    </>
-  );
-}
-
-interface MemoryBlocksSectionProps {
-  readonly blocks: MemoryView['blocks'];
-  readonly truncated: boolean;
-}
-
-/**
- * @brief Renders allocated heap memory blocks with hex dump.
- * @param props Properties for memory blocks.
- * @return Rendered memory blocks JSX element.
- */
-function MemoryBlocksSection(props: MemoryBlocksSectionProps) {
-  const { blocks, truncated } = props;
-  if (blocks.length === 0) return null;
-  return (
-    <div className="memory__blocks">
-      <div className="memory__title">
-        Bộ nhớ chương trình đã cấp phát (malloc/new)
-        {truncated ? ' · đã lược bớt' : ''}
-      </div>
-      {blocks.map((block) => (
-        <div key={`block-${block.address}`} className="memory__block">
-          <div className="memory__block-head">
-            {formatAddress(block.address)} · {block.size} byte
-            {block.truncated ? ' (chỉ hiện phần đầu)' : ''}
-          </div>
-          {hexDump(block.address, block.bytes).map((row) => (
-            <div key={`${block.address}-${row.address}`} className="memory__row">
-              <span className="memory__address">{row.address}</span>
-              <span className="memory__hex">{row.hex}</span>
-              <span className="memory__ascii">{row.ascii}</span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-interface MemoryTabProps {
-  readonly memory: MemoryView;
-  readonly engineLabel: string;
-}
-
-/**
- * @brief Renders the memory visualizer tab body showing linked structures and allocated blocks.
- * @param props Component properties for memory tab.
- * @return The rendered memory visualizer JSX element.
- */
-function MemoryTab(props: MemoryTabProps) {
-  const { memory, engineLabel } = props;
-  if (memory.chains.length === 0 && memory.blocks.length === 0) {
-    return <EmptyMemoryHint engineLabel={engineLabel} />;
-  }
-
-  return (
-    <div className="console__body">
-      <div className="memory">
-        <MemoryChainsSection chains={memory.chains} />
-        <MemoryBlocksSection blocks={memory.blocks} truncated={memory.truncated} />
-      </div>
     </div>
   );
 }
@@ -297,11 +232,53 @@ function OutputTab(props: OutputTabProps) {
   );
 }
 
+interface ConsoleActiveTabProps {
+  readonly consoleTab: ConsoleTab;
+  readonly stdin: string;
+  readonly onStdinChange: (val: string) => void;
+  readonly diagnostics: readonly Diagnostic[];
+  readonly memory: MemoryView;
+  readonly engineLabel: string;
+  readonly safety: readonly SafetyEvent[];
+  readonly output: readonly OutputLine[];
+}
+
 /**
- * @brief Console panel rendering stdout/stderr, compilation problems, runtime safety, memory visualizer, and stdin.
- * @return The rendered console JSX element.
+ * @brief Renders the active console tab body content.
+ * @param props Component properties for active tab.
+ * @return Rendered active tab body JSX element.
  */
-export function ConsolePanel() {
+function ConsoleActiveTab(props: ConsoleActiveTabProps) {
+  const {
+    consoleTab,
+    stdin,
+    onStdinChange,
+    diagnostics,
+    memory,
+    engineLabel,
+    safety,
+    output,
+  } = props;
+  if (consoleTab === 'stdin') {
+    return <StdinTab stdin={stdin} onStdinChange={onStdinChange} />;
+  }
+  if (consoleTab === 'problems') {
+    return <ProblemsTab diagnostics={diagnostics} />;
+  }
+  if (consoleTab === 'memory') {
+    return <MemoryTab memory={memory} engineLabel={engineLabel} />;
+  }
+  if (consoleTab === 'runtime') {
+    return <RuntimeTab safety={safety} engineLabel={engineLabel} />;
+  }
+  return <OutputTab output={output} />;
+}
+
+/**
+ * @brief Selects all state values and actions needed for the console panel.
+ * @return An object containing store state and action dispatches.
+ */
+function useConsoleStore() {
   const output = useAppStore((state) => state.output);
   const diagnostics = useAppStore((state) => state.watch.diagnostics);
   const safety = useAppStore((state) => state.watch.safety);
@@ -312,28 +289,58 @@ export function ConsolePanel() {
   const clearOutput = useAppStore((state) => state.clearOutput);
   const stdin = useAppStore((state) => state.stdin);
   const setStdin = useAppStore((state) => state.setStdin);
+  return {
+    output,
+    diagnostics,
+    safety,
+    memory,
+    engineLabel,
+    consoleTab,
+    setConsoleTab,
+    clearOutput,
+    stdin,
+    setStdin,
+  };
+}
+
+/**
+ * @brief Console panel rendering stdout/stderr, compilation problems, runtime safety, memory visualizer, and stdin.
+ * @return The rendered console JSX element.
+ */
+export function ConsolePanel() {
+  const store = useConsoleStore();
+  const [copiedProblems, setCopiedProblems] = useState(false);
+
+  const handleCopyProblems = () => {
+    void copyTextToClipboard(formatDiagnosticsForClipboard(store.diagnostics)).then((ok) => {
+      if (ok) {
+        setCopiedProblems(true);
+        window.setTimeout(() => setCopiedProblems(false), 2000);
+      }
+    });
+  };
 
   return (
     <>
       <ConsoleTabsHeader
-        activeTab={consoleTab}
-        diagnosticsCount={diagnostics.length}
-        safetyCount={safety.length}
-        onSelectTab={setConsoleTab}
-        onClearOutput={clearOutput}
+        activeTab={store.consoleTab}
+        diagnosticsCount={store.diagnostics.length}
+        safetyCount={store.safety.length}
+        onSelectTab={store.setConsoleTab}
+        onClearOutput={store.clearOutput}
+        onCopyProblems={handleCopyProblems}
+        copiedProblems={copiedProblems}
       />
-
-      {consoleTab === 'stdin' ? (
-        <StdinTab stdin={stdin} onStdinChange={setStdin} />
-      ) : consoleTab === 'problems' ? (
-        <ProblemsTab diagnostics={diagnostics} />
-      ) : consoleTab === 'memory' ? (
-        <MemoryTab memory={memory} engineLabel={engineLabel} />
-      ) : consoleTab === 'runtime' ? (
-        <RuntimeTab safety={safety} engineLabel={engineLabel} />
-      ) : (
-        <OutputTab output={output} />
-      )}
+      <ConsoleActiveTab
+        consoleTab={store.consoleTab}
+        stdin={store.stdin}
+        onStdinChange={store.setStdin}
+        diagnostics={store.diagnostics}
+        memory={store.memory}
+        engineLabel={store.engineLabel}
+        safety={store.safety}
+        output={store.output}
+      />
     </>
   );
 }
