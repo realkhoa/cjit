@@ -218,8 +218,32 @@ describe('clang engine: run', () => {
     expect(outcome.detail).toContain('toolchain');
   });
 
-  it('does not reach the worker when the file does not parse', async () => {
+  it('forwards the code to the compiler worker for compilation and diagnostics', async () => {
     const worker = new FakeWorker();
+    worker.script = [
+      {
+        kind: 'done',
+        requestId: 1,
+        outcome: {
+          status: 'compile-error',
+          detail: "broken.cpp:1:11: error: expected ')'",
+          exitCode: 1,
+          elapsedMs: 0,
+          steps: 0,
+          diagnostics: [
+            {
+              severity: 'error',
+              message: "expected ')'",
+              source: 'broken.cpp',
+              startLine: 1,
+              startColumn: 11,
+              endLine: 1,
+              endColumn: 12,
+            },
+          ],
+        },
+      },
+    ];
     const engine = engineWith(worker);
     const sink = collectingSink();
 
@@ -230,9 +254,10 @@ describe('clang engine: run', () => {
       new AbortController().signal,
     );
 
-    expect(worker.posted).toEqual([]);
+    expect(worker.posted).toHaveLength(1);
+    expect(worker.posted[0]).toMatchObject({ kind: 'run', code: 'int main( { return 0; }\n' });
     expect(outcome.status).toBe('compile-error');
-    expect(sink.snapshots[0]?.status).toBe('compile-error');
+    expect(outcome.diagnostics).toHaveLength(1);
   });
 
   it('stops a runaway build by terminating the worker', async () => {

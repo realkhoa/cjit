@@ -267,4 +267,71 @@ describe('C++ resolution: what still needs clang', () => {
     expect(analysis.warningCount).toBe(0);
     expect(analysis.infoCount).toBe(0);
   });
+
+  it('accepts forward_list, any and other modern headers without unknown header warning', () => {
+    const analysis = analyse(
+      [
+        '#include <forward_list>',
+        '#include <any>',
+        '#include <charconv>',
+        'int main() { return 0; }',
+      ].join('\n'),
+    );
+
+    expect(analysis.errorCount).toBe(0);
+    expect(analysis.warningCount).toBe(0);
+  });
+
+  it('parses structs with member default initializers and const operator methods', () => {
+    const analysis = analyse(
+      [
+        '#include <string>',
+        'struct Person {',
+        '    std::string name;',
+        '    int age{};',
+        '    bool operator<(const Person& other) const { return age < other.age; }',
+        '};',
+        'struct IsEven {',
+        '    bool operator()(int n) const { return n % 2 == 0; }',
+        '};',
+        'int main() { return 0; }',
+      ].join('\n'),
+    );
+
+    expect(analysis.errorCount).toBe(0);
+  });
+
+  it('parses templates with SFINAE default parameters and concept constraints', () => {
+    const analysis = analyse(
+      [
+        'template <typename T>',
+        'concept Numeric = true;',
+        'template <Numeric T>',
+        'T add(T a, T b) { return a + b; }',
+        'template <typename T, typename = int>',
+        'T sub(T a, T b) { return a - b; }',
+        'int main() { return 0; }',
+      ].join('\n'),
+    );
+
+    expect(analysis.errorCount).toBe(0);
+  });
+
+  it('parses structured bindings in declarations and range-for loops', () => {
+    const analysis = analyse(
+      [
+        '#include <vector>',
+        '#include <utility>',
+        'int main() {',
+        '    std::pair<int, int> p{1, 2};',
+        '    auto [x, y] = p;',
+        '    std::vector<std::pair<int, int>> vec;',
+        '    for (const auto& [a, b] : vec) {}',
+        '    return 0;',
+        '}',
+      ].join('\n'),
+    );
+
+    expect(analysis.errorCount).toBe(0);
+  });
 });

@@ -347,6 +347,7 @@ class Parser {
 
     let depth = 1;
     let expectParameter = false;
+    let inDefaultArg = false;
     while (!this.atEnd()) {
       const token = this.peek();
       if (token.text === '<') {
@@ -360,12 +361,24 @@ class Parser {
         if (depth <= 0) break;
         continue;
       }
-      if (token.text === 'typename' || token.text === 'class') {
+      if (token.text === ',' && depth === 1) {
+        inDefaultArg = false;
+        expectParameter = false;
+        this.advance();
+        continue;
+      }
+      if (token.text === '=' && depth === 1) {
+        inDefaultArg = true;
+        expectParameter = false;
+        this.advance();
+        continue;
+      }
+      if (!inDefaultArg && (token.text === 'typename' || token.text === 'class' || this.typedefs.has(token.text))) {
         expectParameter = true;
         this.advance();
         continue;
       }
-      if (expectParameter && (token.kind === 'identifier' || token.kind === 'keyword')) {
+      if (!inDefaultArg && expectParameter && (token.kind === 'identifier' || token.kind === 'keyword')) {
         // The parameter is a type name from here on: `T total{};` must parse.
         this.typedefs.add(token.text);
         params.push(token.text);
@@ -500,6 +513,10 @@ class Parser {
       const knownTag =
         this.isKnownTagName(token.text) &&
         !(sawConcreteType && [';', '=', ',', '[', ')'].includes(nextText ?? ''));
+
+      if (token.text === 'operator' || sawConcreteType) {
+        break;
+      }
 
       if (
         (token.kind === 'identifier' || token.kind === 'keyword') &&
@@ -676,6 +693,20 @@ class Parser {
           const methodStart = this.peek().start;
           const declarator = this.parseDeclarator(spec.type);
           if (declarator.type.kind === 'function' && declarator.name !== undefined) {
+            while (
+              this.check('const') ||
+              this.check('noexcept') ||
+              this.check('override') ||
+              this.check('final')
+            ) {
+              this.advance();
+            }
+            if (this.check('=')) {
+              this.advance();
+              if (this.check('0') || this.check('default') || this.check('delete')) {
+                this.advance();
+              }
+            }
             let body: CompoundStmt | undefined;
             if (this.check('{')) body = this.parseCompound();
             else this.consumeOptionalSemicolon();
@@ -724,6 +755,10 @@ class Parser {
               start: declStart,
               end: this.previousEnd(),
             });
+          }
+          // Support member default initializers: `int age{};` or `int age = 0;`
+          if (this.check('=') || this.check('{')) {
+            this.parseInitializer();
           }
           if (this.check(',')) {
             this.advance();
@@ -889,7 +924,21 @@ class Parser {
     }
 
     let name: string | undefined;
-    if (this.isNameToken(this.peek())) {
+    if (this.check('[')) {
+      // C++17 structured binding: auto [a, b] = ... or const auto& [a, b] : ...
+      this.advance();
+      const names: string[] = [];
+      while (!this.atEnd() && !this.check(']')) {
+        if (this.isNameToken(this.peek())) {
+          names.push(this.advance().text);
+        } else {
+          this.advance();
+        }
+        if (this.check(',')) this.advance();
+      }
+      this.expect(']', "expected ']' to close structured binding");
+      name = names[0] ?? '__binding';
+    } else if (this.isNameToken(this.peek())) {
       name = this.advance().text;
 
       /*
@@ -1095,6 +1144,21 @@ class Parser {
       if (handled) return handled;
     }
 
+    /*
+     * `concept Numeric = ...;` - C++20 concept definition. The name is registered
+     * in typedefs so `template <Numeric T>` recognizes Numeric as a type constraint.
+     */
+    if (this.check('concept')) {
+      this.advance();
+      if (this.isNameToken(this.peek())) {
+        const conceptName = this.advance().text;
+        this.typedefs.add(conceptName);
+      }
+      this.skipToStatementEnd();
+      if (this.check(';')) this.advance();
+      return [];
+    }
+
     const skipped = this.detectUnsupportedConstruct();
     if (skipped) return [skipped];
 
@@ -1149,6 +1213,9 @@ class Parser {
           });
         }
       } else if (declarator.type.kind === 'function' && declarator.name !== undefined) {
+        while (this.check('const') || this.check('noexcept') || this.check('throw')) {
+          this.advance();
+        }
         let body: CompoundStmt | undefined;
         if (this.check('{')) {
           body = this.parseCompound();
@@ -2030,20 +2097,20 @@ class Parser {
     }
     this.advance();
 
-    // `mutable`, `noexcept` and a trailing return type carry nothing this engine needs.
-    while (this.check('mutable') || this.check('noexcept')) this.advance();
+    let params: ParamDecl[] = [];
+    if (this.check('(')) {
+      this.advance();
+      const parsed = this.parseParameterList();
+      params = parsed.params;
+    }
+
+    // `mutable`, `noexcept`, `constexpr` and a trailing return type carry nothing this engine needs.
+    while (this.check('mutable') || this.check('noexcept') || this.check('constexpr')) this.advance();
     if (this.check('-') && this.tokenAt(this.index + 1)?.text === '>') {
       this.advance();
       this.advance();
       this.parseTypeName();
     }
-
-    if (!this.check('(')) {
-      this.error(this.peek(), "expected '(' after the capture list");
-      return undefined;
-    }
-    this.advance();
-    const parsed = this.parseParameterList();
 
     if (!this.check('{')) {
       this.error(this.peek(), 'a lambda must have a body');
@@ -2055,7 +2122,7 @@ class Parser {
       kind: 'lambda',
       captures,
       ...(captureAll ? { captureAll } : {}),
-      params: parsed.params,
+      params,
       body,
       start: open.start,
       end: body.end,

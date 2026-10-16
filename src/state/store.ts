@@ -1064,7 +1064,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
           engineLabel: engine.label,
           status: outcome.status,
           detail: outcome.detail,
-          diagnostics: outcome.diagnostics.length > 0 ? outcome.diagnostics : state.watch.diagnostics,
+          diagnostics:
+            outcome.status === 'ok'
+              ? outcome.diagnostics
+              : outcome.diagnostics.length > 0
+                ? outcome.diagnostics
+                : state.watch.diagnostics,
         },
         consoleTab: outcome.status === 'compile-error' ? 'problems' : state.consoleTab,
         // Only a compiler produces files to save, and only if the link succeeded.

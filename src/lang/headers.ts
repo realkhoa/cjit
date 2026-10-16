@@ -250,6 +250,23 @@ const CPP_HEADER_ALIASES: ReadonlyMap<string, string> = new Map<string, string>(
   ['compare', ''],
   ['span', ''],
   ['filesystem', ''],
+  ['forward_list', ''],
+  ['any', ''],
+  ['charconv', ''],
+  ['scoped_allocator', ''],
+  ['typeindex', ''],
+  ['system_error', ''],
+  ['future', ''],
+  ['condition_variable', ''],
+  ['shared_mutex', ''],
+  ['cstdbool', 'stdbool.h'],
+  ['ciso646', ''],
+  ['clocale', ''],
+  ['csetjmp', ''],
+  ['cstdarg', 'stdarg.h'],
+  ['cuchar', ''],
+  ['cwchar', ''],
+  ['cwctype', ''],
 ]);
 
 export const BITS_HEADER_NOTE =

@@ -1,4 +1,4 @@
-import { buildCompileErrorSnapshot, createFastEngine } from '@/engine/fastEngine';
+import { createFastEngine } from '@/engine/fastEngine';
 import { analyzeSource } from '@/lang/analyze';
 import { publishAnalysis } from '@/lang/analysisCache';
 import type {
@@ -104,20 +104,12 @@ export function createClangEngine(options: ClangEngineOptions = {}): Engine {
     },
 
     run(source: SourceUnit, stdin: string, sink: RunSink, signal: AbortSignal): Promise<RunOutcome> {
-      const analysis = analyzeSource(source.code, source.file);
-      publishAnalysis(analysis);
-
-      if (analysis.errorCount > 0) {
-        sink.stderr(`Build failed: ${analysis.diagnostics.length} problem(s)\n`);
-        sink.watch(buildCompileErrorSnapshot(analysis));
-        return Promise.resolve({
-          status: 'compile-error',
-          detail: 'Build failed — see the Problems tab',
-          exitCode: null,
-          elapsedMs: analysis.elapsedMs,
-          steps: 0,
-          diagnostics: analysis.diagnostics,
-        });
+      try {
+        const analysis = analyzeSource(source.code, source.file);
+        publishAnalysis(analysis);
+      } catch {
+        // Fast engine analysis is purely for editor intelligence side-channel;
+        // it must never block the real clang compiler from building the source.
       }
 
       return new Promise<RunOutcome>((resolve, reject) => {
