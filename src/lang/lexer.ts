@@ -335,15 +335,6 @@ export function lex(source: string, file: string): LexResult {
             syncLines(startOffset, index);
             const content = source.slice(contentStart, closeIndex);
             emit('string', startOffset, start, content);
-            diagnostics.push(
-              makeDiagnostic(
-                'warning',
-                'C++ raw string literals are not supported by the fast engine (Run uses clang-wasm)',
-                file,
-                start,
-                here(),
-              ),
-            );
             continue;
           }
         }

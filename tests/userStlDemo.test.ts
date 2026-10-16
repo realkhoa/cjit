@@ -479,12 +479,10 @@ describe('user STL demo analysis', () => {
   it('parses the entire user STL demo code with zero syntax errors in fast engine', () => {
     const result = analyzeSource(USER_CODE, 'main.cpp');
     expect(result.errorCount).toBe(0);
-    expect(result.diagnostics).toHaveLength(1);
-    expect(result.diagnostics[0]?.severity).toBe('warning');
-    expect(result.diagnostics[0]?.message).toContain('C++ raw string literals are not supported by the fast engine (Run uses clang-wasm)');
+    expect(result.diagnostics).toHaveLength(0);
   });
 
-  it('parses C++ raw string literals with custom delimiters into string tokens with warning', () => {
+  it('parses C++ raw string literals with custom delimiters into string tokens without warnings', () => {
     const code = `using namespace std;
 void f() {
     regex r(R"(\\d+)");
@@ -492,7 +490,7 @@ void f() {
 }`;
     const result = analyzeSource(code, 'main.cpp');
     expect(result.errorCount).toBe(0);
-    expect(result.diagnostics.every((d) => d.severity === 'warning')).toBe(true);
+    expect(result.diagnostics).toHaveLength(0);
   });
 
   it('parses nested templates with closing >> correctly', () => {

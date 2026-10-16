@@ -118,11 +118,11 @@ describe('lexer: literals', () => {
     expect(errors[0]?.message).toContain('unterminated string');
   });
 
-  it('degrades a C++ raw string to a warning plus a skippable token', () => {
+  it('lexes C++ raw string literals as string tokens without warnings or errors', () => {
     const result = lex('auto s = R"(raw)";', 'main.cpp');
-    expect(result.diagnostics.some((item) => item.severity === 'warning')).toBe(true);
-    expect(result.diagnostics.some((item) => item.severity === 'error')).toBe(false);
+    expect(result.diagnostics).toHaveLength(0);
     expect(texts('auto s = R"(raw)";')).toEqual(['auto', 's', '=', 'R"(raw)"', ';']);
+    expect(result.tokens[3]?.value).toBe('raw');
   });
 });
 
