@@ -513,6 +513,125 @@ export function isReferenceWrapperType(type: CType): boolean {
   );
 }
 
+/**
+ * @brief Constructs a CType descriptor for std::unique_ptr<T>.
+ * @details Represents a smart pointer that owns and manages another object through a pointer
+ * and disposes of that object when the unique_ptr goes out of scope.
+ * @param element Contained pointee type.
+ * @return A CType representing std::unique_ptr<T>.
+ */
+export function uniquePtrType(element: CType): CType {
+  return {
+    kind: 'struct',
+    name: `std::unique_ptr<${element.name}>`,
+    size: 8,
+    signed: false,
+    bits: 64,
+    element,
+    members: [{ name: '__ptr', offset: 0, type: pointerTo(element) }],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::unique_ptr object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents unique_ptr, false otherwise.
+ */
+export function isUniquePtrType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::unique_ptr' ||
+      type.name.startsWith('std::unique_ptr<') ||
+      type.name === 'unique_ptr' ||
+      type.name.startsWith('unique_ptr<'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::shared_ptr<T>.
+ * @details Represents a smart pointer that retains shared ownership of an object through a pointer.
+ * Several shared_ptr objects may own the same object. The object is destroyed and its memory
+ * deallocated when the last remaining shared_ptr owning the object is destroyed or reset.
+ * @param element Contained pointee type.
+ * @return A CType representing std::shared_ptr<T>.
+ */
+export function sharedPtrType(element: CType): CType {
+  return {
+    kind: 'struct',
+    name: `std::shared_ptr<${element.name}>`,
+    size: 16,
+    signed: false,
+    bits: 128,
+    element,
+    members: [
+      { name: '__ptr', offset: 0, type: pointerTo(element) },
+      { name: '__ctrl', offset: 8, type: { kind: 'int', name: 'unsigned long', size: 8, signed: false, bits: 64 } },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::shared_ptr object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents shared_ptr, false otherwise.
+ */
+export function isSharedPtrType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::shared_ptr' ||
+      type.name.startsWith('std::shared_ptr<') ||
+      type.name === 'shared_ptr' ||
+      type.name.startsWith('shared_ptr<'))
+  );
+}
+
+/**
+ * @brief Constructs a CType descriptor for std::weak_ptr<T>.
+ * @details Represents a smart pointer that holds a non-owning ("weak") reference to an object
+ * that is managed by std::shared_ptr. It must be converted to std::shared_ptr in order to access
+ * the referenced object.
+ * @param element Contained pointee type.
+ * @return A CType representing std::weak_ptr<T>.
+ */
+export function weakPtrType(element: CType): CType {
+  return {
+    kind: 'struct',
+    name: `std::weak_ptr<${element.name}>`,
+    size: 16,
+    signed: false,
+    bits: 128,
+    element,
+    members: [
+      { name: '__ptr', offset: 0, type: pointerTo(element) },
+      { name: '__ctrl', offset: 8, type: { kind: 'int', name: 'unsigned long', size: 8, signed: false, bits: 64 } },
+    ],
+  };
+}
+
+/**
+ * @brief Checks if a CType represents a std::weak_ptr object.
+ * @param type The type descriptor to inspect.
+ * @return True if the type represents weak_ptr, false otherwise.
+ */
+export function isWeakPtrType(type: CType): boolean {
+  return (
+    type.kind === 'struct' &&
+    (type.name === 'std::weak_ptr' ||
+      type.name.startsWith('std::weak_ptr<') ||
+      type.name === 'weak_ptr' ||
+      type.name.startsWith('weak_ptr<'))
+  );
+}
+
+/**
+ * @brief Checks if a CType represents any smart pointer (unique_ptr, shared_ptr, weak_ptr).
+ * @param type The type descriptor to inspect.
+ * @return True if the type is a smart pointer, false otherwise.
+ */
+export function isSmartPointerType(type: CType): boolean {
+  return isUniquePtrType(type) || isSharedPtrType(type) || isWeakPtrType(type);
+}
+
 function containerType(name: string, element: CType, displayName?: string): CType {
   const base = vectorType(element);
   return { ...base, name: `std::${name}<${displayName ?? element.name}>` };
@@ -1042,6 +1161,7 @@ export class TypeResolver {
         isVariantType(resolved) ||
         isAnyType(resolved) ||
         isReferenceWrapperType(resolved) ||
+        isSmartPointerType(resolved) ||
         containerKindOf(resolved) !== null ||
         resolved.kind === 'array' ||
         resolved.kind === 'pointer';
@@ -1166,6 +1286,24 @@ export class TypeResolver {
     if (refWrapMatch) {
       const element = this.resolveByName((refWrapMatch[1] ?? 'int').trim(), depth + 1);
       return referenceWrapperType(element);
+    }
+
+    const uniquePtrMatch = /^(?:std::)?unique_ptr\s*<(.+)>$/.exec(name);
+    if (uniquePtrMatch) {
+      const element = this.resolveByName((uniquePtrMatch[1] ?? 'int').trim(), depth + 1);
+      return uniquePtrType(element);
+    }
+
+    const sharedPtrMatch = /^(?:std::)?shared_ptr\s*<(.+)>$/.exec(name);
+    if (sharedPtrMatch) {
+      const element = this.resolveByName((sharedPtrMatch[1] ?? 'int').trim(), depth + 1);
+      return sharedPtrType(element);
+    }
+
+    const weakPtrMatch = /^(?:std::)?weak_ptr\s*<(.+)>$/.exec(name);
+    if (weakPtrMatch) {
+      const element = this.resolveByName((weakPtrMatch[1] ?? 'int').trim(), depth + 1);
+      return weakPtrType(element);
     }
 
     if (name === 'std::any' || name === 'any') return anyType();

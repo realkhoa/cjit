@@ -89,6 +89,7 @@ export interface LiteralExpr extends Node {
 export interface IdentifierExpr extends Node {
   readonly kind: 'identifier';
   readonly name: string;
+  readonly templateArg?: string;
 }
 
 export interface BinaryExpr extends Node {
@@ -326,6 +327,7 @@ export interface IfStmt extends Node {
   readonly condition: Expression;
   readonly thenBranch: Statement;
   readonly elseBranch?: Statement;
+  readonly init?: Statement | Declaration | readonly Declaration[];
 }
 
 export interface ForStmt extends Node {

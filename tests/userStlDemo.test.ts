@@ -744,4 +744,69 @@ int main() {
     expect(exec.stdout).toContain('Optional: 42');
     expect(exec.stdout).toContain('Reference wrapper: 20');
   });
+
+  it('runs demoMemory without faulting', () => {
+    const demoMemorySrc = USER_CODE.slice(
+      USER_CODE.indexOf('void demoMemory()'),
+      USER_CODE.indexOf('void demoSystemUtilities()'),
+    );
+    const code = `using namespace std;
+struct Person {
+    string name;
+    int age{};
+
+    bool operator<(const Person& other) const {
+        return age < other.age;
+    }
+};
+${demoMemorySrc}
+int main() {
+    demoMemory();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('MEMORY DIAGNOSTICS:', exec.diagnostics);
+      console.log('MEMORY DETAIL:', exec.detail);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Unique: Alice');
+    expect(exec.stdout).toContain('Shared count: 2');
+    expect(exec.stdout).toContain('Weak lock: Bob');
+    expect(exec.stdout).toContain('Shared count after reset: 1');
+  });
+
+  it('runs demoContainers, demoAlgorithms, demoStrings, demoUtilities, and demoMemory sequentially together without error', () => {
+    const code = USER_CODE.slice(
+      0,
+      USER_CODE.indexOf('void demoSystemUtilities()'),
+    ) + `
+int main() {
+    demoContainers();
+    demoAlgorithms();
+    demoStrings();
+    demoUtilities();
+    demoMemory();
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.cpp');
+    const exec = execute(analysis.unit);
+    if (exec.status !== 'ok') {
+      console.log('SEQUENTIAL 5 DEMOS DIAGNOSTICS:', exec.diagnostics);
+      console.log('SEQUENTIAL 5 DEMOS DETAIL:', exec.detail);
+    }
+    expect(exec.status).toBe('ok');
+    expect(exec.stdout).toContain('Vector size: 6');
+    expect(exec.stdout).toContain('Even count: 4');
+    expect(exec.stdout).toContain('Starts with Modern: true');
+    expect(exec.stdout).toContain('Optional: 42');
+    expect(exec.stdout).toContain('Reference wrapper: 20');
+    expect(exec.stdout).toContain('Unique: Alice');
+    expect(exec.stdout).toContain('Shared count: 2');
+    expect(exec.stdout).toContain('Weak lock: Bob');
+    expect(exec.stdout).toContain('Shared count after reset: 1');
+  });
 });

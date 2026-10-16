@@ -33,6 +33,12 @@ import {
   isAnyType,
   isReferenceWrapperType,
   referenceWrapperType,
+  uniquePtrType,
+  isUniquePtrType,
+  sharedPtrType,
+  isSharedPtrType,
+  isWeakPtrType,
+  isSmartPointerType,
   isRegexIteratorType,
   isRegexType,
   isStreamBuffer,
@@ -381,6 +387,13 @@ function collectNestedDeclarations(statement: Statement): Declaration[] {
     }
     switch (node.kind) {
       case 'if':
+        if (node.init) {
+          if (Array.isArray(node.init)) {
+            for (const item of node.init) out.push(item);
+          } else if ('kind' in node.init && isDeclarationKind(node.init.kind)) {
+            out.push(node.init as Declaration);
+          }
+        }
         visit(node.thenBranch);
         if (node.elseBranch) visit(node.elseBranch);
         return;
@@ -519,6 +532,11 @@ class Interpreter {
   private readonly variants = new Map<number, Value>();
   private readonly anyValues = new Map<number, Value>();
   private readonly boundCallables = new Map<number, { target: Value; boundArgs: Value[] }>();
+  private readonly sharedControlBlocks = new Map<
+    number,
+    { ptr: number; strongCount: number; weakCount: number; type: CType }
+  >();
+  private ctrlBlockSeq = 1;
   private readonly rng = { state: 1 };
   private stdinText: string;
   private stdinCursor = 0;
@@ -905,6 +923,29 @@ class Interpreter {
       if (destructor) this.callFunction(destructor, [], entry.address, entry.type);
     }
 
+    const currentScope = this.currentScope;
+    if (currentScope) {
+      for (const binding of currentScope.bindings.values()) {
+        if (isSharedPtrType(binding.type)) {
+          const ctrlId = this.memory.readUint64(binding.address + 8);
+          if (ctrlId > 0) {
+            const ctrl = this.sharedControlBlocks.get(ctrlId);
+            if (ctrl) {
+              ctrl.strongCount = Math.max(0, ctrl.strongCount - 1);
+            }
+          }
+        } else if (isWeakPtrType(binding.type)) {
+          const ctrlId = this.memory.readUint64(binding.address + 8);
+          if (ctrlId > 0) {
+            const ctrl = this.sharedControlBlocks.get(ctrlId);
+            if (ctrl) {
+              ctrl.weakCount = Math.max(0, ctrl.weakCount - 1);
+            }
+          }
+        }
+      }
+    }
+
     this.scopes.pop();
   }
 
@@ -952,6 +993,7 @@ class Interpreter {
 
     let type = this.resolver.resolve(declaration.type);
     let address: number;
+    let initialEvaluated: Value | undefined;
 
     /*
      * A class with a constructor: the storage is zeroed and then the constructor runs, so
@@ -1105,10 +1147,9 @@ class Interpreter {
         address = this.allocateFor({ ...type, size: count * 8 });
         this.memory.fill(address, 0, count * 8);
       } else if (declaration.initializer) {
-        const initial = this.evaluate(declaration.initializer);
-        type = initial.type;
+        initialEvaluated = this.evaluate(declaration.initializer);
+        type = initialEvaluated.type;
         address = this.allocateFor(type);
-        this.store(type, address, convertTo(type, initial));
       } else {
         this.diagnostics.push(
           makeDiagnostic(
@@ -1150,7 +1191,7 @@ class Interpreter {
 
     if (declaration.initializer) {
       this.uninitialized.delete(address);
-      this.initialize(binding, declaration.initializer);
+      this.initialize(binding, declaration.initializer, initialEvaluated);
       this.record(binding, declaration.start);
     } else if (containerKindOf(type) !== null) {
       this.uninitialized.delete(address);
@@ -1168,7 +1209,7 @@ class Interpreter {
       this.uninitialized.delete(address);
       this.regexIterators.set(address, { matches: [], index: 0 });
       this.record(binding, declaration.start);
-    } else if (isOptionalType(type) || isVariantType(type) || isAnyType(type) || isReferenceWrapperType(type)) {
+    } else if (isOptionalType(type) || isVariantType(type) || isAnyType(type) || isReferenceWrapperType(type) || isSmartPointerType(type)) {
       this.uninitialized.delete(address);
       this.memory.fill(address, 0, Math.max(type.size, 1));
       this.record(binding, declaration.start);
@@ -1206,7 +1247,41 @@ class Interpreter {
     }
   }
 
-  private initialize(binding: Binding, initializer: Expression): void {
+  private initialize(binding: Binding, initializer: Expression, preEvaluated?: Value): void {
+    if (isUniquePtrType(binding.type)) {
+      const evaluated = preEvaluated ?? this.evaluate(initializer);
+      this.store(binding.type, binding.address, evaluated);
+      return;
+    }
+
+    if (isSharedPtrType(binding.type)) {
+      const evaluated = preEvaluated ?? this.evaluate(initializer);
+      const isLvalue = initializer.kind === 'identifier' || initializer.kind === 'member' || initializer.kind === 'index';
+      if (isLvalue && evaluated.kind === 'aggregate') {
+        const ctrlId = this.memory.readUint64(evaluated.address + 8);
+        if (ctrlId > 0) {
+          const ctrl = this.sharedControlBlocks.get(ctrlId);
+          if (ctrl) ctrl.strongCount += 1;
+        }
+      }
+      this.store(binding.type, binding.address, evaluated);
+      return;
+    }
+
+    if (isWeakPtrType(binding.type)) {
+      const evaluated = preEvaluated ?? this.evaluate(initializer);
+      const isLvalue = initializer.kind === 'identifier' || initializer.kind === 'member' || initializer.kind === 'index';
+      if (isLvalue && evaluated.kind === 'aggregate') {
+        const ctrlId = this.memory.readUint64(evaluated.address + 8);
+        if (ctrlId > 0) {
+          const ctrl = this.sharedControlBlocks.get(ctrlId);
+          if (ctrl) ctrl.weakCount += 1;
+        }
+      }
+      this.store(binding.type, binding.address, evaluated);
+      return;
+    }
+
     // C++ containers have their own construction rules.
     if (containerKindOf(binding.type) !== null) {
       if (initializer.kind === 'init-list') {
@@ -1352,7 +1427,7 @@ class Interpreter {
       return;
     }
 
-    const evaluated = this.evaluate(initializer);
+    const evaluated = preEvaluated ?? this.evaluate(initializer);
     // A declaration with `auto` learns its type from the value it is given, the
     // same way a later assignment does.
     if (binding.type.kind === 'unknown' && evaluated.kind !== 'uninit' && evaluated.kind !== 'void') {
@@ -1407,8 +1482,13 @@ class Interpreter {
    * @return True if the value evaluates to true in conditional contexts.
    */
   private isTruthy(value: Value): boolean {
-    if (value.kind === 'aggregate' && isOptionalType(value.type)) {
-      return this.memory.readUint8(value.address) !== 0;
+    if (value.kind === 'aggregate') {
+      if (isOptionalType(value.type)) {
+        return this.memory.readUint8(value.address) !== 0;
+      }
+      if (isSmartPointerType(value.type)) {
+        return this.memory.readUint64(value.address) !== 0;
+      }
     }
     return toBoolean(value);
   }
@@ -1445,8 +1525,36 @@ class Interpreter {
       case 'empty':
         return;
       case 'if':
-        if (this.isTruthy(this.evaluate(statement.condition))) this.executeStatement(statement.thenBranch);
-        else if (statement.elseBranch) this.executeStatement(statement.elseBranch);
+        if (statement.init) {
+          this.pushScope(this.currentScopeName());
+          try {
+            const init = statement.init;
+            if (Array.isArray(init)) {
+              for (const decl of init) {
+                this.executeDeclaration(decl);
+                this.recordLine(decl.start.line);
+              }
+            } else {
+              const single = init as Statement | Declaration;
+              if (isDeclarationKind(single.kind)) {
+                this.executeDeclaration(single as Declaration);
+                this.recordLine(single.start.line);
+              } else {
+                this.executeStatement(single as Statement);
+              }
+            }
+            if (this.isTruthy(this.evaluate(statement.condition))) {
+              this.executeStatement(statement.thenBranch);
+            } else if (statement.elseBranch) {
+              this.executeStatement(statement.elseBranch);
+            }
+          } finally {
+            this.popScope();
+          }
+        } else {
+          if (this.isTruthy(this.evaluate(statement.condition))) this.executeStatement(statement.thenBranch);
+          else if (statement.elseBranch) this.executeStatement(statement.elseBranch);
+        }
         return;
       case 'while':
         // Each loop counts its own iterations from 1 (reset per execution, so a
@@ -2201,6 +2309,12 @@ class Interpreter {
         const elemType = raw.type.element ?? intType();
         return this.load(elemType, raw.address + 8);
       }
+      if (raw.kind === 'aggregate' && (isUniquePtrType(raw.type) || isSharedPtrType(raw.type))) {
+        const ptr = this.memory.readUint64(raw.address);
+        if (ptr === 0) throw new RuntimeFault('null pointer dereference', expression.start);
+        const elemType = raw.type.element ?? UNKNOWN_TYPE;
+        return this.load(elemType, ptr);
+      }
       const pointer = this.decay(raw);
       const address = toPointerAddress(pointer);
       const pointee = pointer.type.pointee ?? pointer.type.element ?? UNKNOWN_TYPE;
@@ -2265,6 +2379,35 @@ class Interpreter {
 
     if (operator === '=') {
       const raw = this.evaluate(expression.value);
+      if (isSharedPtrType(target.type)) {
+        const oldCtrl = this.memory.readUint64(target.address + 8);
+        if (oldCtrl > 0) {
+          const ctrl = this.sharedControlBlocks.get(oldCtrl);
+          if (ctrl) ctrl.strongCount = Math.max(0, ctrl.strongCount - 1);
+        }
+        const isLvalue = expression.value.kind === 'identifier' || expression.value.kind === 'member' || expression.value.kind === 'index';
+        if (isLvalue && raw.kind === 'aggregate') {
+          const newCtrl = this.memory.readUint64(raw.address + 8);
+          if (newCtrl > 0) {
+            const ctrl = this.sharedControlBlocks.get(newCtrl);
+            if (ctrl) ctrl.strongCount += 1;
+          }
+        }
+      } else if (isWeakPtrType(target.type)) {
+        const oldCtrl = this.memory.readUint64(target.address + 8);
+        if (oldCtrl > 0) {
+          const ctrl = this.sharedControlBlocks.get(oldCtrl);
+          if (ctrl) ctrl.weakCount = Math.max(0, ctrl.weakCount - 1);
+        }
+        const isLvalue = expression.value.kind === 'identifier' || expression.value.kind === 'member' || expression.value.kind === 'index';
+        if (isLvalue && raw.kind === 'aggregate') {
+          const newCtrl = this.memory.readUint64(raw.address + 8);
+          if (newCtrl > 0) {
+            const ctrl = this.sharedControlBlocks.get(newCtrl);
+            if (ctrl) ctrl.weakCount += 1;
+          }
+        }
+      }
       if (target.type.kind === 'pointer') {
         const address = this.pointerAddressOf(raw);
         value = { kind: 'pointer', type: target.type, address: address ?? 0 };
@@ -2715,6 +2858,13 @@ class Interpreter {
         if (!hasVal) throw new RuntimeFault('bad optional access', expression.start);
         baseAddress = evaluated.address + 8;
         baseType = evaluated.type.element ?? UNKNOWN_TYPE;
+      } else if (evaluated.kind === 'aggregate' && (isUniquePtrType(evaluated.type) || isSharedPtrType(evaluated.type))) {
+        const ptr = this.memory.readUint64(evaluated.address);
+        if (ptr === 0) {
+          throw new RuntimeFault('null pointer dereference', expression.start);
+        }
+        baseAddress = ptr;
+        baseType = evaluated.type.element ?? UNKNOWN_TYPE;
       } else {
         const pointer = this.decay(evaluated);
         const address = toPointerAddress(pointer);
@@ -2833,7 +2983,8 @@ class Interpreter {
       }
 
       // C++ helpers the engine implements itself: std::sort, std::min, std::swap…
-      const helper = this.callCppHelper(name, expression.args, expression.start);
+      const templateArg = callee.kind === 'identifier' ? callee.templateArg : undefined;
+      const helper = this.callCppHelper(name, expression.args, expression.start, templateArg);
       if (helper !== undefined) return helper;
 
       // C++ struct constructor call: Person{"Alice", 30} or IsEven{}
@@ -4735,6 +4886,88 @@ class Interpreter {
       }
     }
 
+    if (object.kind === 'aggregate' && isUniquePtrType(object.type)) {
+      const address = object.address;
+      const ptr = this.memory.readUint64(address);
+      const elemType = object.type.element ?? intType();
+      switch (property) {
+        case 'get':
+          return { kind: 'pointer', type: pointerTo(elemType), address: ptr };
+        case 'reset': {
+          this.memory.writeUint64(address, 0);
+          return voidValue();
+        }
+        case 'release': {
+          this.memory.writeUint64(address, 0);
+          return { kind: 'pointer', type: pointerTo(elemType), address: ptr };
+        }
+        default:
+          throw new RuntimeFault(`std::unique_ptr has no member '${property}'`, position);
+      }
+    }
+
+    if (object.kind === 'aggregate' && isSharedPtrType(object.type)) {
+      const address = object.address;
+      const ptr = this.memory.readUint64(address);
+      const ctrlId = this.memory.readUint64(address + 8);
+      const ctrl = ctrlId > 0 ? this.sharedControlBlocks.get(ctrlId) : undefined;
+      const elemType = object.type.element ?? intType();
+      switch (property) {
+        case 'use_count':
+          return intValue(longType(), ctrl?.strongCount ?? 0);
+        case 'get':
+          return { kind: 'pointer', type: pointerTo(elemType), address: ptr };
+        case 'reset': {
+          if (ctrl) {
+            ctrl.strongCount = Math.max(0, ctrl.strongCount - 1);
+          }
+          this.memory.writeUint64(address, 0);
+          this.memory.writeUint64(address + 8, 0);
+          return voidValue();
+        }
+        case 'unique':
+          return intValue(boolType(), (ctrl?.strongCount ?? 0) === 1 ? 1 : 0);
+        default:
+          throw new RuntimeFault(`std::shared_ptr has no member '${property}'`, position);
+      }
+    }
+
+    if (object.kind === 'aggregate' && isWeakPtrType(object.type)) {
+      const address = object.address;
+      const ctrlId = this.memory.readUint64(address + 8);
+      const ctrl = ctrlId > 0 ? this.sharedControlBlocks.get(ctrlId) : undefined;
+      const elemType = object.type.element ?? intType();
+      switch (property) {
+        case 'use_count':
+          return intValue(longType(), ctrl?.strongCount ?? 0);
+        case 'expired':
+          return intValue(boolType(), (!ctrl || ctrl.strongCount === 0) ? 1 : 0);
+        case 'lock': {
+          const retType = sharedPtrType(elemType);
+          const retAddr = this.allocateFor(retType);
+          if (ctrl && ctrl.strongCount > 0) {
+            ctrl.strongCount += 1;
+            this.memory.writeUint64(retAddr, ctrl.ptr);
+            this.memory.writeUint64(retAddr + 8, ctrlId);
+          } else {
+            this.memory.writeUint64(retAddr, 0);
+            this.memory.writeUint64(retAddr + 8, 0);
+          }
+          return { kind: 'aggregate', type: retType, address: retAddr };
+        }
+        case 'reset': {
+          if (ctrl) {
+            ctrl.weakCount = Math.max(0, ctrl.weakCount - 1);
+          }
+          this.memory.writeUint64(address, 0);
+          this.memory.writeUint64(address + 8, 0);
+          return voidValue();
+        }
+        default:
+          throw new RuntimeFault(`std::weak_ptr has no member '${property}'`, position);
+      }
+    }
+
     return undefined;
   }
 
@@ -4743,6 +4976,7 @@ class Interpreter {
     name: string,
     args: readonly Expression[],
     position: SourcePos,
+    templateArg?: string,
   ): Value | undefined {
     const base = name.replace(/^std::/, '');
     const supported = new Set([
@@ -4758,6 +4992,7 @@ class Interpreter {
       'partial_sum', 'adjacent_difference', 'inner_product',
       'gcd', 'lcm', 'back_inserter', 'make_pair',
       'get', 'any_cast', 'ref', 'bind',
+      'make_unique', 'make_shared',
     ]);
     if (!name.startsWith('std::') && !supported.has(base)) return undefined;
     if (!supported.has(base)) return undefined;
@@ -4769,6 +5004,44 @@ class Interpreter {
     };
 
     switch (base) {
+      case 'make_unique':
+      case 'make_shared': {
+        const typeName = templateArg?.trim();
+        const pointeeType = typeName ? this.resolver.resolveByName(typeName) : intType();
+        const heapAddress = this.builtinAlloc(Math.max(pointeeType.size, 1));
+        if (args.length === 1) {
+          const initVal = this.evaluate(args[0]!);
+          if (initVal.kind === 'aggregate' && initVal.type.name === pointeeType.name) {
+            this.memory.copy(initVal.address, heapAddress, Math.max(pointeeType.size, 1));
+          } else {
+            this.store(pointeeType, heapAddress, initVal);
+          }
+        } else if (args.length > 0) {
+          const constructor = this.constructors.get(pointeeType.name)?.get(args.length);
+          if (constructor) {
+            this.callFunction(constructor, this.callArguments(args, constructor), heapAddress, pointeeType);
+          } else {
+            this.initializeAggregate(pointeeType, heapAddress, args);
+          }
+        } else {
+          this.memory.fill(heapAddress, 0, Math.max(pointeeType.size, 1));
+        }
+
+        if (base === 'make_unique') {
+          const retType = uniquePtrType(pointeeType);
+          const retAddr = this.allocateFor(retType);
+          this.memory.writeUint64(retAddr, heapAddress);
+          return { kind: 'aggregate', type: retType, address: retAddr };
+        } else {
+          const ctrlId = this.ctrlBlockSeq++;
+          this.sharedControlBlocks.set(ctrlId, { ptr: heapAddress, strongCount: 1, weakCount: 0, type: pointeeType });
+          const retType = sharedPtrType(pointeeType);
+          const retAddr = this.allocateFor(retType);
+          this.memory.writeUint64(retAddr, heapAddress);
+          this.memory.writeUint64(retAddr + 8, ctrlId);
+          return { kind: 'aggregate', type: retType, address: retAddr };
+        }
+      }
       case 'min':
       case 'max': {
         const left = argumentAt(0);
@@ -5513,6 +5786,17 @@ class Interpreter {
       return;
     }
 
+    if (isSmartPointerType(type)) {
+      if (value.kind === 'aggregate') {
+        this.memory.copy(value.address, address, Math.max(type.size, 1));
+        return;
+      }
+      const ptr = toPointerAddress(value);
+      this.memory.writeUint64(address, ptr ?? 0);
+      if (type.size > 8) this.memory.writeUint64(address + 8, 0);
+      return;
+    }
+
     switch (type.kind) {
       case 'bool':
         this.memory.writeUint8(address, toNumber(value) !== 0 ? 1 : 0);
@@ -5721,6 +6005,12 @@ class Interpreter {
         if (raw.kind === 'aggregate' && isOptionalType(raw.type)) {
           const elemType = raw.type.element ?? intType();
           return { address: raw.address + 8, type: elemType };
+        }
+        if (raw.kind === 'aggregate' && (isUniquePtrType(raw.type) || isSharedPtrType(raw.type))) {
+          const ptr = this.memory.readUint64(raw.address);
+          if (ptr === 0) throw new RuntimeFault('null pointer dereference', expression.start);
+          const elemType = raw.type.element ?? UNKNOWN_TYPE;
+          return { address: ptr, type: elemType };
         }
         const pointer = this.decay(raw);
         const address = toPointerAddress(pointer);

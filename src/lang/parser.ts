@@ -1548,28 +1548,29 @@ class Parser {
     this.expect('(', "expected '(' after if");
 
     let condition: Expression;
+    let init: Statement | Declaration | readonly Declaration[] | undefined;
     if (this.isDeclarationStart()) {
       const decls = this.parseDeclarationList(false);
       const initDecl = decls[0];
+      init = decls;
       if (this.check(';')) {
         this.advance();
         condition = this.parseExpression();
       } else {
-        const condExpr: Expression =
-          initDecl && 'initializer' in initDecl && initDecl.initializer
-            ? initDecl.initializer
-            : {
-                kind: 'identifier',
-                name: initDecl && 'name' in initDecl ? (initDecl.name as string) : 'cond',
-                start: keyword.start,
-                end: this.previousEnd(),
-              };
+        const condExpr: Expression = {
+          kind: 'identifier',
+          name: initDecl && 'name' in initDecl ? (initDecl.name as string) : 'cond',
+          start: keyword.start,
+          end: this.previousEnd(),
+        };
         condition = condExpr;
       }
     } else {
       condition = this.parseExpression();
       if (this.check(';')) {
         this.advance();
+        const initExpr = condition;
+        init = { kind: 'expr-stmt', expression: initExpr, start: initExpr.start, end: initExpr.end };
         condition = this.parseExpression();
       }
     }
@@ -1586,6 +1587,7 @@ class Parser {
       condition,
       thenBranch,
       ...(elseBranch === undefined ? {} : { elseBranch }),
+      ...(init === undefined ? {} : { init }),
       start: keyword.start,
       end: (elseBranch ?? thenBranch).end,
     };
@@ -2031,8 +2033,17 @@ class Parser {
           this.advance();
         }
       }
-      if (this.check('<') && this.templateAhead()) this.skipBalancedAngles();
-      return { kind: 'identifier', name, start: token.start, end: this.previousEnd() };
+      let templateArg: string | undefined;
+      if (this.check('<') && this.templateAhead()) {
+        templateArg = this.skipBalancedAngles();
+      }
+      return {
+        kind: 'identifier',
+        name,
+        ...(templateArg ? { templateArg } : {}),
+        start: token.start,
+        end: this.previousEnd(),
+      };
     }
 
     if (this.check('(')) {
@@ -2154,21 +2165,30 @@ class Parser {
     return this.templateCloses(this.index);
   }
 
-  /** Advances past balanced `<...>` angle brackets including `>>` tokens. */
-  private skipBalancedAngles(): void {
-    if (!this.check('<')) return;
+  /** Advances past balanced `<...>` angle brackets including `>>` tokens, returning the inner template argument string. */
+  private skipBalancedAngles(): string {
+    if (!this.check('<')) return '';
     let depth = 0;
+    let text = '';
     while (!this.atEnd()) {
       const token = this.advance();
       if (token.text === '<') {
+        if (depth > 0) text += (token.hasLeadingSpace ? ' ' : '') + '<';
         depth += 1;
       } else if (token.text === '>' || token.text === '>>') {
         depth -= token.text === '>>' ? 2 : 1;
-        if (depth <= 0) return;
+        if (depth <= 0) {
+          if (token.text === '>>' && depth < 0) text += '>';
+          return text.trim();
+        }
+        text += (token.hasLeadingSpace ? ' ' : '') + token.text;
       } else if (token.text === ';' || token.text === '{') {
-        return;
+        return text.trim();
+      } else {
+        text += (token.hasLeadingSpace && text.length > 0 ? ' ' : '') + token.text;
       }
     }
+    return text.trim();
   }
 
   /**
