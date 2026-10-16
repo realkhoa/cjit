@@ -53,13 +53,19 @@ export const BUILTIN_TYPE_NAMES: ReadonlySet<string> = new Set([
  * from the container list in the type resolver.
  */
 export const STD_TYPE_NAMES: ReadonlySet<string> = new Set([
-  'string', 'wstring',
+  'string', 'wstring', 'string_view', 'wstring_view',
   'vector', 'deque', 'list', 'forward_list',
   'set', 'multiset', 'unordered_set',
   'map', 'multimap', 'unordered_map',
   'stack', 'queue', 'priority_queue',
-  'pair', 'tuple', 'array', 'optional', 'variant', 'complex',
+  'pair', 'tuple', 'array', 'optional', 'variant', 'any', 'complex', 'bitset',
+  'reference_wrapper', 'unique_ptr', 'shared_ptr', 'weak_ptr',
   'ostream', 'istream', 'iostream', 'stringstream', 'ostringstream', 'istringstream',
+  'ofstream', 'ifstream', 'fstream',
+  'regex', 'smatch', 'cmatch', 'sregex_iterator', 'cregex_iterator',
+  'mt19937', 'mt19937_64', 'default_random_engine', 'random_device',
+  'uniform_int_distribution', 'uniform_real_distribution', 'normal_distribution', 'bernoulli_distribution',
+  'greater', 'less', 'equal_to',
   'function', 'initializer_list',
 ]);
 

@@ -990,19 +990,23 @@ class Parser {
       }
 
       if (this.check('(')) {
-        const open = this.advance();
-        const params = this.parseParameterList();
-        type = {
-          kind: 'function',
-          name: `${type.name}(...)`,
-          qualifiers: [],
-          returnType: type,
-          params: params.params,
-          variadic: params.variadic,
-          start: open.start,
-          end: params.end,
-        };
-        continue;
+        if (this.looksLikeParameterList()) {
+          const open = this.advance();
+          const params = this.parseParameterList();
+          type = {
+            kind: 'function',
+            name: `${type.name}(...)`,
+            qualifiers: [],
+            returnType: type,
+            params: params.params,
+            variadic: params.variadic,
+            start: open.start,
+            end: params.end,
+          };
+          continue;
+        }
+        // Direct initialization `Type var(args...)`: leave `(` for parseInitializer.
+        break;
       }
 
       // C++ trailing return type: `auto f() -> int`.
@@ -1026,6 +1030,93 @@ class Parser {
     }
 
     return { name, type };
+  }
+
+  /**
+   * @brief Distinguishes a function parameter list from direct initialization.
+   * @details Checks whether `(` ahead starts a function parameter list (e.g. `(int x, int y)`)
+   * or a direct-initialization expression argument list (e.g. `(42)`, `(values.size())`).
+   * @return True if tokens within parentheses resemble formal parameter declarations.
+   */
+  private looksLikeParameterList(): boolean {
+    if (!this.check('(')) return false;
+    const first = this.tokenAt(this.index + 1);
+    if (first === undefined || first.kind === 'eof') return false;
+
+    // `()` is a function declarator (e.g. `int main()`, `void run()`).
+    if (first.text === ')') return true;
+    // `(void)` is a C function declarator.
+    if (first.text === 'void' && this.tokenAt(this.index + 2)?.text === ')') return true;
+    // `(...)` is a variadic function declarator.
+    if (first.text === '...') return true;
+
+    // Literals are always initializer expressions, never parameter declarations.
+    if (first.kind === 'number' || first.kind === 'string' || first.kind === 'char') {
+      return false;
+    }
+
+    // Unary/punctuator operators like `!`, `~`, `+`, `-` start expressions.
+    if (['!', '~', '+', '-', '{', '['].includes(first.text)) {
+      return false;
+    }
+
+    const second = this.tokenAt(this.index + 2);
+
+    // Expressions accessing properties or methods: `(values.size())`, `(ptr->func())`
+    if (second !== undefined && (second.text === '.' || second.text === '->')) {
+      return false;
+    }
+
+    // Function calls on objects/functions: `(func(x))`
+    if (second !== undefined && second.text === '(' && !BUILTIN_TYPE_KEYWORDS.has(first.text)) {
+      return false;
+    }
+
+    // Qualified type or template type parameter: `(std::string s)` or `(vector<int> v)`
+    if (first.text === 'std' && second?.text === '::') {
+      const third = this.tokenAt(this.index + 3);
+      if (third !== undefined && STD_TYPE_NAMES.has(third.text)) return true;
+      return false;
+    }
+
+    // Known type keywords/qualifiers are parameters: `(int x)`, `(const char* s)`
+    if (
+      BUILTIN_TYPE_KEYWORDS.has(first.text) ||
+      TYPE_QUALIFIERS.has(first.text) ||
+      STORAGE_CLASSES.has(first.text) ||
+      first.text === 'struct' ||
+      first.text === 'class' ||
+      first.text === 'union' ||
+      first.text === 'enum' ||
+      first.text === 'typename' ||
+      first.text === 'auto'
+    ) {
+      return true;
+    }
+
+    // A known typedef or struct tag followed by declarator characters
+    if (this.typedefs.has(first.text) || this.isKnownTagName(first.text) || STD_TYPE_NAMES.has(first.text)) {
+      if (
+        second !== undefined &&
+        (this.isNameToken(second) || second.text === '*' || second.text === '&' || second.text === '<')
+      ) {
+        return true;
+      }
+      if (second !== undefined && (second.text === ')' || second.text === ',')) {
+        return true;
+      }
+    }
+
+    // If there are two consecutive identifiers: `(MyType name)` -> parameter declaration!
+    if (
+      second !== undefined &&
+      this.isNameToken(first) &&
+      (this.isNameToken(second) || second.text === '*' || second.text === '&')
+    ) {
+      return true;
+    }
+
+    return false;
   }
 
   private parseParameterList(): { params: ParamDecl[]; variadic: boolean; end: SourcePos } {
@@ -1275,6 +1366,26 @@ class Parser {
     }
     // C++ brace initialization: `int x{5};`
     if (this.check('{')) return this.parseInitList();
+    // C++ direct-initialization: `int x(5);`, `vector<int> squares(values.size());`
+    if (this.check('(')) {
+      const open = this.advance();
+      const items: Expression[] = [];
+      while (!this.atEnd() && !this.check(')')) {
+        items.push(this.parseAssignmentExpression());
+        if (this.check(',')) {
+          this.advance();
+          continue;
+        }
+        break;
+      }
+      const close = this.expect(')', "expected ')' to close initializer");
+      return {
+        kind: 'init-list',
+        items,
+        start: open.start,
+        end: close?.end ?? this.previousEnd(),
+      };
+    }
     return undefined;
   }
 
@@ -1431,7 +1542,34 @@ class Parser {
   private parseIf(): Statement {
     const keyword = this.advance();
     this.expect('(', "expected '(' after if");
-    const condition = this.parseExpression();
+
+    let condition: Expression;
+    if (this.isDeclarationStart()) {
+      const decls = this.parseDeclarationList(false);
+      const initDecl = decls[0];
+      if (this.check(';')) {
+        this.advance();
+        condition = this.parseExpression();
+      } else {
+        const condExpr: Expression =
+          initDecl && 'initializer' in initDecl && initDecl.initializer
+            ? initDecl.initializer
+            : {
+                kind: 'identifier',
+                name: initDecl && 'name' in initDecl ? (initDecl.name as string) : 'cond',
+                start: keyword.start,
+                end: this.previousEnd(),
+              };
+        condition = condExpr;
+      }
+    } else {
+      condition = this.parseExpression();
+      if (this.check(';')) {
+        this.advance();
+        condition = this.parseExpression();
+      }
+    }
+
     this.expect(')', "expected ')' after the if condition");
     const thenBranch = this.parseStatement();
     let elseBranch: Statement | undefined;
@@ -1765,6 +1903,18 @@ class Parser {
         continue;
       }
 
+      if (token.text === '{') {
+        const initList = this.parseInitList();
+        expression = {
+          kind: 'call',
+          callee: expression,
+          args: initList.items,
+          start: expression.start,
+          end: initList.end,
+        };
+        continue;
+      }
+
       if (token.text === '[') {
         this.advance();
         const index = this.parseExpression();
@@ -1941,24 +2091,51 @@ class Parser {
     return cursor;
   }
 
-  /** True when the `<` at `ltIndex` closes and is followed by something name-like. */
+  /**
+   * @brief True when the `<` at `ltIndex` closes and is followed by something that can follow a type or template expression.
+   * @param ltIndex Token index of the opening `<`.
+   * @return Whether the `<` closes as a template.
+   */
   private templateCloses(ltIndex: number): boolean {
     let depth = 0;
     for (let cursor = ltIndex; cursor < this.tokens.length; cursor += 1) {
       const token = this.tokenAt(cursor);
       if (token === undefined || token.kind === 'eof') return false;
-      if (token.text === '<') depth += 1;
-      else if (token.text === '>') {
-        depth -= 1;
-        if (depth === 0) {
+      if (token.text === '<') {
+        depth += 1;
+      } else if (token.text === '>' || token.text === '>>') {
+        depth -= token.text === '>>' ? 2 : 1;
+        if (depth <= 0) {
           const after = this.tokenAt(cursor + 1);
           if (after === undefined) return false;
           return (
             this.isNameToken(after) ||
             after.text === '{' ||
+            after.text === '(' ||
+            after.text === '[' ||
             after.text === '&' ||
             after.text === '*' ||
-            after.text === '('
+            after.text === ';' ||
+            after.text === ',' ||
+            after.text === ')' ||
+            after.text === '::' ||
+            after.text === '.' ||
+            after.text === '->' ||
+            after.text === '<<' ||
+            after.text === '>>' ||
+            after.text === '==' ||
+            after.text === '!=' ||
+            after.text === '<=' ||
+            after.text === '>=' ||
+            after.text === '+' ||
+            after.text === '-' ||
+            after.text === '/' ||
+            after.text === '%' ||
+            after.text === '&&' ||
+            after.text === '||' ||
+            after.text === '|' ||
+            after.text === '^' ||
+            after.text === '='
           );
         }
       } else if (token.text === ';' || token.text === '{' || token.text === '}') {
@@ -1973,16 +2150,20 @@ class Parser {
     return this.templateCloses(this.index);
   }
 
+  /** Advances past balanced `<...>` angle brackets including `>>` tokens. */
   private skipBalancedAngles(): void {
     if (!this.check('<')) return;
     let depth = 0;
     while (!this.atEnd()) {
       const token = this.advance();
-      if (token.text === '<') depth += 1;
-      else if (token.text === '>') {
-        depth -= 1;
+      if (token.text === '<') {
+        depth += 1;
+      } else if (token.text === '>' || token.text === '>>') {
+        depth -= token.text === '>>' ? 2 : 1;
         if (depth <= 0) return;
-      } else if (token.text === ';' || token.text === '{') return;
+      } else if (token.text === ';' || token.text === '{') {
+        return;
+      }
     }
   }
 
