@@ -102,8 +102,7 @@ async function handleRun(request: ClangRunRequest): Promise<void> {
       post({
         kind: 'status',
         requestId,
-        message:
-          'Đang nạp toolchain clang + lld (~58 MB ở lần tải đầu tiên; các lần sau lấy từ IndexedDB trong máy)…',
+        message: 'Loading...',
       });
 
       cachedRuntime = createClangRuntime({
@@ -143,11 +142,6 @@ async function handleRun(request: ClangRunRequest): Promise<void> {
     // costing 58 MB.
     if (!reportedToolchain) {
       reportedToolchain = true;
-      post({
-        kind: 'status',
-        requestId,
-        message: `Toolchain: ${fromCache} file từ IndexedDB trong máy, ${fromNetwork} tải mới`,
-      });
     }
 
     // `load` means the toolchain itself is missing, which is not the user's code
@@ -167,9 +161,7 @@ async function handleRun(request: ClangRunRequest): Promise<void> {
       requestId,
       outcome: {
         status,
-        detail:
-          outcome.failure ??
-          `built with clang + lld (${(outcome.wasmBytes / 1024).toFixed(0)} KB wasm)`,
+        detail: outcome.failure ?? '',
         exitCode: outcome.exitCode,
         elapsedMs: 0,
         steps: 0,

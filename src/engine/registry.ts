@@ -18,14 +18,14 @@ interface PendingDefaults {
 
 const PENDING_DEFAULTS: Record<EngineId, PendingDefaults> = {
   'clang-wasm': {
-    label: 'Clang + LLD (WebAssembly)',
+    label: 'Clang',
     milestone: 'M7',
-    note: 'Biên dịch C++ thật với libc++/STL; cần tải toolchain và sysroot.',
+    note: 'Biên dịch C++ đầy đủ.',
   },
   fast: {
-    label: 'Fast watch engine',
+    label: 'Fast',
     milestone: 'M1–M3',
-    note: 'Preprocessor + parser + evaluator nhẹ, đủ nhanh cho debounce 1 giây.',
+    note: 'Biên dịch tức thì.',
   },
 };
 

@@ -58,7 +58,7 @@ export function Toolbar() {
           className="btn"
           disabled={!artifactsReady}
           onClick={() => void downloadArtifact('wasm')}
-          title="Tải file .wasm mà clang + lld vừa tạo (chỉ bật sau khi Run bằng engine biên dịch thật thành công)"
+          title="Tải file .wasm (chỉ bật sau khi Run thành công)"
         >
           ⬇ .wasm
         </button>
@@ -88,7 +88,7 @@ export function Toolbar() {
           className="select"
           value={engineId}
           onChange={(event) => setEngineId(event.target.value as EngineId)}
-          title="Engine cho nút Run/F5. clang + lld biên dịch C/C++ thật bằng WebAssembly (lần đầu tải ~58 MB toolchain, sau đó browser cache lại). Pane Watch luôn dùng fast engine vì build clang không thể chạy mỗi giây."
+          title="Chọn engine cho nút Run/F5"
         >
           {ENGINE_ORDER.map((id) => (
             <option key={id} value={id}>
@@ -141,7 +141,7 @@ export function Toolbar() {
 
       <span
         className="pill"
-        title="Pane Watch, inline values và timeline luôn do fast engine tính (clang không thể build mỗi giây). Chỉ nút Run mới dùng clang."
+        title="Pane Watch, inline values và timeline luôn tự động cập nhật ngay khi gõ."
       >
         watch: fast · debounce {debounceMs} ms
       </span>

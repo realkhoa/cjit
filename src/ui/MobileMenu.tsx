@@ -84,7 +84,7 @@ export function MobileMenu(props: MobileMenuProps) {
                     />
                     <div className="mobile-sheet__engine-text">
                       <strong>{engine.label}</strong>
-                      <small>{id === 'fast' ? 'Watch pane & tốc độ cao' : 'WebAssembly clang + lld'}</small>
+                      <small>{id === 'fast' ? 'Tốc độ cao' : 'Biên dịch đầy đủ'}</small>
                     </div>
                   </label>
                 );

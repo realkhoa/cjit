@@ -914,10 +914,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       : getEngine(WATCH_ENGINE_ID);
 
     if (!engine.saveArtifact) {
-      get().appendOutput(
-        'system',
-        `> ${engine.id} không tạo ra file để tải — chỉ engine biên dịch thật (clang + lld) mới sinh .wasm/.o`,
-      );
+      get().appendOutput('system', '> Không hỗ trợ tải file cho chế độ này');
       return;
     }
 
@@ -1007,7 +1004,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     set({
       runState: 'running',
-      output: [line('system', `> Build and run with ${engine.label}`)],
+      output: [line('system', '> Building...')],
       consoleTab: 'output',
       // On a phone the console is a separate pane; running is a request to see
       // the result, so show it.
@@ -1017,7 +1014,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
     if (fellBack) {
       get().appendOutput(
         'system',
-        `> ${preferred} chưa được nối (M7) → chạy bằng ${engine.label}`,
+        `> Đang chạy bằng ${engine.label}...`,
       );
     }
 
@@ -1042,7 +1039,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const fallback = getEngine(WATCH_ENGINE_ID);
         get().appendOutput(
           'system',
-          `> ${engine.id} (${engine.label}) không chạy được: ${outcome.detail} → chạy bằng ${fallback.id}`,
+          `> Không thể khởi động ${engine.label} (${outcome.detail}) → chuyển sang ${fallback.label}`,
         );
         outcome = await fallback.run(
           { code: state.code, file: state.path, files: workspaceFiles(state) },

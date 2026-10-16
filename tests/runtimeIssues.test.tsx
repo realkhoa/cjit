@@ -53,7 +53,7 @@ describe('runtime issues tab', () => {
     // clang only builds and runs: saying so avoids the impression that a clean
     // report means the program was checked.
     useAppStore.setState({
-      watch: { ...emptyWatch({ status: 'ok' }), engineLabel: 'Clang + LLD (WebAssembly)', safety: [] },
+      watch: { ...emptyWatch({ status: 'ok' }), engineLabel: 'Clang', safety: [] },
       consoleTab: 'runtime',
     });
     const { unmount } = render(<ConsolePanel />);

@@ -96,7 +96,7 @@ export function createClangEngine(options: ClangEngineOptions = {}): Engine {
 
   return {
     id: 'clang-wasm',
-    label: 'Clang + LLD (WebAssembly)',
+    label: 'Clang',
 
     // The realtime pane never waits for a compiler.
     watch(source: SourceUnit, signal: AbortSignal): Promise<WatchSnapshot> {
