@@ -53,7 +53,7 @@ describe('downloading artifacts', () => {
     await useAppStore.getState().downloadArtifact('wasm');
 
     const text = useAppStore.getState().output.map((entry) => entry.text).join('\n');
-    expect(text).toContain('không tạo ra file để tải');
+    expect(text).toContain('Không hỗ trợ tải file cho chế độ này');
   });
 
   it('is offered only after a compiler run that produced a binary', async () => {

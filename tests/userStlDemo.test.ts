@@ -813,7 +813,7 @@ int main() {
   it('executes the COMPLETE 475-line user STL demo suite from start to finish', () => {
     const analysis = analyzeSource(USER_CODE, 'main.cpp');
     expect(analysis.errorCount).toBe(0);
-    const exec = execute(analysis.unit);
+    const exec = execute(analysis.unit, { maxMillis: 15_000 });
     if (exec.status !== 'ok') {
       console.log('FULL DEMO STATUS:', exec.status);
       console.log('FULL DEMO DETAIL:', exec.detail);

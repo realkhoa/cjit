@@ -38,41 +38,66 @@ interface Snippet {
 }
 
 const SNIPPETS: readonly Snippet[] = [
-  { label: 'main', detail: 'int main(int argc, char** argv)', body: 'int main(int argc, char** argv) {\n\t$0\n\treturn 0;\n}' },
-  { label: 'main-void', detail: 'int main(void)', body: 'int main(void) {\n\t$0\n\treturn 0;\n}' },
+  {
+    label: 'main',
+    detail: 'int main(int argc, char** argv)',
+    body: 'int main(int argc, char** argv) {\n\t$0\n\treturn 0;\n}',
+  },
+  {
+    label: 'main-void',
+    detail: 'int main(void)',
+    body: 'int main(void) {\n\t$0\n\treturn 0;\n}',
+  },
   { label: 'for', detail: 'for loop (C style)', body: 'for (int i = 0; i < ${1:n}; i++) {\n\t$0\n}' },
   { label: 'while', detail: 'while loop', body: 'while (${1:condition}) {\n\t$0\n}' },
   { label: 'dowhile', detail: 'do/while loop', body: 'do {\n\t$0\n} while (${1:condition});' },
   { label: 'if', detail: 'if statement', body: 'if (${1:condition}) {\n\t$0\n}' },
   { label: 'ifelse', detail: 'if/else statement', body: 'if (${1:condition}) {\n\t$0\n} else {\n\t\n}' },
-  { label: 'switch', detail: 'switch statement', body: 'switch (${1:value}) {\n\tcase ${2:0}:\n\t\t$0\n\t\tbreak;\n\tdefault:\n\t\tbreak;\n}' },
+  {
+    label: 'switch',
+    detail: 'switch statement',
+    body: 'switch (${1:value}) {\n\tcase ${2:0}:\n\t\t$0\n\t\tbreak;\n\tdefault:\n\t\tbreak;\n}',
+  },
   { label: 'struct', detail: 'struct definition', body: 'struct ${1:Name} {\n\t$0\n};' },
   { label: 'include', detail: '#include <...>', body: '#include <${1:stdio.h}>' },
   { label: 'printf', detail: 'printf with newline', body: 'printf("${1:%d}\\n", ${2:value});' },
   { label: 'cout', detail: 'std::cout with newline', body: 'std::cout << ${1:value} << \'\\n\';' },
   { label: 'vector', detail: 'std::vector declaration', body: 'std::vector<${1:int}> ${2:values};' },
-  { label: 'trycatch', detail: 'try/catch block', body: 'try {\n\t$0\n} catch (const std::exception& e) {\n\tstd::cerr << e.what() << \'\\n\';\n}' },
+  {
+    label: 'trycatch',
+    detail: 'try/catch block',
+    body: 'try {\n\t$0\n} catch (const std::exception& e) {\n\tstd::cerr << e.what() << \'\\n\';\n}',
+  },
 ];
 
+/**
+ * @brief Maps a symbol kind to the corresponding Monaco completion item kind.
+ * @param monaco The Monaco editor namespace instance.
+ * @param kind The semantic symbol kind from analysis.
+ * @return Monaco.languages.CompletionItemKind for the symbol.
+ */
 function completionKind(monaco: typeof Monaco, kind: SymbolKind): Monaco.languages.CompletionItemKind {
-  switch (kind) {
-    case 'function':
-      return monaco.languages.CompletionItemKind.Function;
-    case 'struct':
-    case 'union':
-    case 'enum':
-      return monaco.languages.CompletionItemKind.Class;
-    case 'typedef':
-      return monaco.languages.CompletionItemKind.TypeParameter;
-    case 'enumerator':
-      return monaco.languages.CompletionItemKind.EnumMember;
-    case 'member':
-      return monaco.languages.CompletionItemKind.Field;
-    default:
-      return monaco.languages.CompletionItemKind.Variable;
-  }
+  const kinds: Partial<Record<SymbolKind, Monaco.languages.CompletionItemKind>> = {
+    function: monaco.languages.CompletionItemKind.Function,
+    struct: monaco.languages.CompletionItemKind.Class,
+    union: monaco.languages.CompletionItemKind.Class,
+    enum: monaco.languages.CompletionItemKind.Class,
+    typedef: monaco.languages.CompletionItemKind.TypeParameter,
+    enumerator: monaco.languages.CompletionItemKind.EnumMember,
+    member: monaco.languages.CompletionItemKind.Field,
+    variable: monaco.languages.CompletionItemKind.Variable,
+    parameter: monaco.languages.CompletionItemKind.Variable,
+  };
+  return kinds[kind] ?? monaco.languages.CompletionItemKind.Variable;
 }
 
+/**
+ * @brief Transforms an internal SymbolInfo into a Monaco completion item.
+ * @param monaco The Monaco editor namespace instance.
+ * @param symbol The symbol descriptor.
+ * @param range The target replacement range in the editor.
+ * @return A formatted Monaco completion item.
+ */
 function toSuggestion(
   monaco: typeof Monaco,
   symbol: SymbolInfo,
@@ -89,6 +114,10 @@ function toSuggestion(
   };
 }
 
+/**
+ * @brief Registers keyword, type, and snippet completions for C/C++ in Monaco.
+ * @param monaco The Monaco editor namespace instance.
+ */
 export function registerKeywordCompletions(monaco: typeof Monaco): void {
   if (keywordRegistered) return;
   keywordRegistered = true;
@@ -131,6 +160,10 @@ export function registerKeywordCompletions(monaco: typeof Monaco): void {
   });
 }
 
+/**
+ * @brief Registers scope-aware symbol autocompletion and hover documentation in Monaco.
+ * @param monaco The Monaco editor namespace instance.
+ */
 export function registerSymbolCompletions(monaco: typeof Monaco): void {
   if (symbolRegistered) return;
   symbolRegistered = true;

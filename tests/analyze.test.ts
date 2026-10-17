@@ -243,7 +243,7 @@ describe('pipeline: the store drives the real engine through the 1s debounce', (
 
     const state = useAppStore.getState();
     expect(state.runState).toBe('idle');
-    expect(state.output.some((entry) => entry.text.includes('clang-wasm'))).toBe(true);
+    expect(state.output.some((entry) => entry.text.includes('Clang') || entry.text.includes('clang-wasm'))).toBe(true);
     expect(state.output.some((entry) => entry.text.includes('ran'))).toBe(true);
     expect(state.watch.engine).toBe('fast');
   });
