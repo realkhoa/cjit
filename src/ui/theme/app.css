@@ -1,5 +1,9 @@
 /* Structural styles. Colours come exclusively from tokens.css. */
 
+:root {
+  --vs-unified-header-height: 38px;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -38,6 +42,127 @@ button {
   height: 100vh;
   height: 100dvh;
   overflow: hidden;
+}
+
+/* ---------- unified header ---------- */
+
+.unified-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--vs-unified-header-height);
+  padding: 0 10px;
+  background: var(--vs-shell);
+  border-bottom: 1px solid var(--vs-border);
+  flex: 0 0 auto;
+  user-select: none;
+  gap: 8px;
+  position: relative;
+  z-index: 10;
+}
+
+.unified-header__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.unified-header__logo {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--vs-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.unified-header__title {
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.2px;
+  color: var(--vs-text);
+  white-space: nowrap;
+}
+
+.unified-header__path {
+  color: var(--vs-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.unified-header__exec {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.unified-header__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.unified-header__menu-wrap {
+  position: relative;
+}
+
+.unified-header__menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--vs-panel);
+  border: 1px solid var(--vs-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+  padding: 4px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+}
+
+.unified-header__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--vs-text);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.unified-header__menu-item:hover:not(:disabled) {
+  background: var(--vs-accent);
+  color: #fff;
+}
+
+.unified-header__menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.unified-header__menu-sep {
+  height: 1px;
+  background: var(--vs-border);
+  margin: 3px 0;
 }
 
 /* ---------- title bar + toolbar ---------- */
