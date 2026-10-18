@@ -1786,9 +1786,27 @@ class Parser {
     return left;
   }
 
+  /**
+   * @brief Checks if a token starts a type name in expression context (e.g. cast or sizeof).
+   * @param token The token to inspect.
+   * @return True if the token is a builtin type, typedef, known tag name, or imported standard type.
+   */
+  private isTypeStartToken(token: Token | undefined): boolean {
+    if (token === undefined) return false;
+    if (this.isTypeSpecifierToken(token)) return true;
+    if (this.isKnownTagName(token.text)) return true;
+    if (
+      STD_TYPE_NAMES.has(token.text) &&
+      (this.usingNamespaceStd || this.usingNames.has(token.text))
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   private isCastAhead(): boolean {
     if (!this.check('(')) return false;
-    return this.isTypeSpecifierToken(this.tokenAt(this.index + 1));
+    return this.isTypeStartToken(this.tokenAt(this.index + 1));
   }
 
   private parseUnaryExpression(): Expression {
@@ -1859,7 +1877,7 @@ class Parser {
 
   private parseSizeof(keyword: Token): Expression {
     this.advance();
-    if (this.check('(') && this.isTypeSpecifierToken(this.tokenAt(this.index + 1))) {
+    if (this.check('(') && this.isTypeStartToken(this.tokenAt(this.index + 1))) {
       this.advance();
       const type = this.parseTypeName();
       this.expect(')', "expected ')' to close sizeof");
