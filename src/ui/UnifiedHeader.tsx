@@ -88,11 +88,12 @@ function UnifiedExec(props: UnifiedExecProps): JSX.Element {
       >
         ▶ Run <span className="btn__key">F5</span>
       </button>
-      <label className="sr-only" htmlFor="unified-engine-select">
+      <label className="sr-only" htmlFor="engine-select">
         Compiler engine
       </label>
       <select
-        id="unified-engine-select"
+        id="engine-select"
+        data-testid="unified-engine-select"
         className="select"
         value={props.engineId}
         onChange={(event) => props.onSelectEngine(event.target.value as EngineId)}

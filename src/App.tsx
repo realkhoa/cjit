@@ -8,8 +8,7 @@ import { MobileMenu } from '@/ui/MobileMenu';
 import { MobileTabs } from '@/ui/MobileTabs';
 import { Splitter } from '@/ui/Splitter';
 import { StatusBar } from '@/ui/StatusBar';
-import { TitleBar } from '@/ui/TitleBar';
-import { Toolbar } from '@/ui/Toolbar';
+import { UnifiedHeader } from '@/ui/UnifiedHeader';
 import { WatchPane } from '@/ui/WatchPane';
 import { useIsMobile } from '@/ui/useIsMobile';
 import { useTimelinePlayback } from '@/ui/useTimelinePlayback';
@@ -22,11 +21,20 @@ import {
   percentFromDelta,
 } from '@/util/layout';
 
+/**
+ * @brief Computes extent of viewport for layout calculations.
+ * @param axis The viewport axis ('width' or 'height').
+ * @return Viewport pixel size or 0 if window is not available.
+ */
 function viewportExtent(axis: 'width' | 'height'): number {
   if (typeof window === 'undefined') return 0;
   return axis === 'width' ? window.innerWidth : window.innerHeight;
 }
 
+/**
+ * @brief Root application component orchestrating desktop and mobile workspace shells.
+ * @return Rendered App component.
+ */
 export function App() {
   const rightPercent = useAppStore((state) => state.rightPercent);
   const bottomPercent = useAppStore((state) => state.bottomPercent);
@@ -111,8 +119,7 @@ export function App() {
 
   return (
     <div className="app">
-      <TitleBar />
-      <Toolbar />
+      <UnifiedHeader />
 
       <main className="workspace">
         <div
