@@ -18,9 +18,9 @@ console below, VS 2022 dark theme. Two engines:
 |---|---|
 | Live | https://realkhoa.github.io/cjit/ |
 | Deploy | GitHub Actions → Pages (`worktree main`, `enablement: true`) |
-| Tests | **733 passing, 59 files** (`npm test`) |
+| Tests | **803 passing, 76 files** (`npm test`) |
 | Typecheck / build | both clean (`npm run typecheck`, `npm run build`) |
-| Last deploy | CI green, `index-Bi_WlZvc.js` |
+| Last deploy | CI green, `index-Dr8rYtz9.js` |
 
 ## 2. The active goal (this is the job)
 
