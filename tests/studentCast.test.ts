@@ -137,4 +137,110 @@ int main() {
     expect(execResult.stdout).toContain('ID: 101');
     expect(execResult.stdout).toContain('Ho ten: Nguyen Van A');
   });
+
+  it('supports standard Legacy C code with struct keywords in main.c', async () => {
+    const { execute } = await import('../src/lang/runtime/interpreter');
+    const code = `
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+struct Student {
+    int id;
+    char name[50];
+    float gpa;
+};
+
+int main(void) {
+    int n = 1;
+    struct Student* students = (struct Student*)calloc(n, sizeof(struct Student));
+    if (students == NULL) return 1;
+    students[0].id = 42;
+    strcpy(students[0].name, "Legacy C");
+    students[0].gpa = 3.9f;
+
+    struct Student* backup = (struct Student*)malloc(n * sizeof(struct Student));
+    if (backup == NULL) {
+        free(students);
+        return 1;
+    }
+    memcpy(backup, students, n * sizeof(struct Student));
+    printf("ID: %d, Name: %s, GPA: %.1f\\n", backup[0].id, backup[0].name, backup[0].gpa);
+
+    free(students);
+    free(backup);
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.c');
+    expect(analysis.diagnostics).toEqual([]);
+    const execResult = execute(analysis.unit);
+    expect(execResult.exitCode).toBe(0);
+    expect(execResult.stdout).toContain('ID: 42, Name: Legacy C, GPA: 3.9');
+  });
+
+  it('supports permissive C code using bare struct tag in main.c', async () => {
+    const { execute } = await import('../src/lang/runtime/interpreter');
+    const code = `
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+struct Student {
+    int id;
+    char name[50];
+    float gpa;
+};
+
+int main(void) {
+    int n = 1;
+    // Permissive bare tag cast and sizeof in .c file without typedef
+    Student* students = (Student*)calloc(n, sizeof(Student));
+    if (students == NULL) return 1;
+    students[0].id = 99;
+    strcpy(students[0].name, "Permissive C");
+    students[0].gpa = 4.0f;
+
+    printf("ID: %d, Name: %s\\n", students[0].id, students[0].name);
+    free(students);
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.c');
+    expect(analysis.diagnostics).toEqual([]);
+    const execResult = execute(analysis.unit);
+    expect(execResult.exitCode).toBe(0);
+    expect(execResult.stdout).toContain('ID: 99, Name: Permissive C');
+  });
+
+  it('supports Legacy C typedef struct patterns', async () => {
+    const { execute } = await import('../src/lang/runtime/interpreter');
+    const code = `
+#include <stdio.h>
+#include <stdlib.h>
+
+typedef struct Node {
+    int val;
+    struct Node* next;
+} Node;
+
+int main(void) {
+    Node* head = (Node*)malloc(sizeof(Node));
+    head->val = 10;
+    head->next = (Node*)malloc(sizeof(Node));
+    head->next->val = 20;
+    head->next->next = NULL;
+
+    printf("%d -> %d\\n", head->val, head->next->val);
+    free(head->next);
+    free(head);
+    return 0;
+}
+`;
+    const analysis = analyzeSource(code, 'main.c');
+    expect(analysis.diagnostics).toEqual([]);
+    const execResult = execute(analysis.unit);
+    expect(execResult.exitCode).toBe(0);
+    expect(execResult.stdout).toContain('10 -> 20');
+  });
 });
