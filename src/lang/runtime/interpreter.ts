@@ -954,6 +954,28 @@ class Interpreter {
     if (!this.functionTable.includes(declaration.name)) {
       this.functionTable.push(declaration.name);
     }
+
+    const doubleColon = declaration.name.lastIndexOf('::');
+    if (doubleColon >= 0) {
+      let tag = declaration.name.slice(0, doubleColon);
+      const angleBracket = tag.indexOf('<');
+      if (angleBracket >= 0) {
+        tag = tag.slice(0, angleBracket);
+      }
+      const lastNamespace = tag.lastIndexOf('::');
+      const bareTag = lastNamespace >= 0 ? tag.slice(lastNamespace + 2) : tag;
+      const member = declaration.name.slice(doubleColon + 2);
+      if (member === bareTag || declaration.isConstructor) {
+        const byArity =
+          this.constructors.get(tag) ?? this.constructors.get(bareTag) ?? new Map<number, FunctionDeclNode>();
+        byArity.set(declaration.params.length, declaration);
+        this.constructors.set(tag, byArity);
+        if (bareTag !== tag) this.constructors.set(bareTag, byArity);
+      } else if (member === `~${bareTag}` || declaration.isDestructor) {
+        this.destructors.set(tag, declaration);
+        if (bareTag !== tag) this.destructors.set(bareTag, declaration);
+      }
+    }
   }
 
   /** The call stack as it was at the last enter/exit, for error reporting. */

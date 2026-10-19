@@ -223,6 +223,7 @@ const CPP_HEADER_ALIASES: ReadonlyMap<string, string> = new Map<string, string>(
   ['deque', ''],
   ['list', ''],
   ['array', ''],
+  ['initializer_list', ''],
   ['bitset', ''],
   ['tuple', ''],
   ['limits', ''],
@@ -322,30 +323,24 @@ export const CPP_NATIVE_HEADERS: ReadonlySet<string> = new Set<string>(
   [...CPP_HEADER_ALIASES].filter(([, target]) => target === '').map(([name]) => name),
 );
 
-/** Header names whose C surface is inlined by `<bits/stdc++.h>`. */
-const BITS_TARGETS: readonly string[] = [
-  'stdio.h',
-  'stdlib.h',
-  'string.h',
-  'math.h',
-  'ctype.h',
-  'stdbool.h',
-  'stdint.h',
-  'limits.h',
-  'assert.h',
-  'time.h',
-];
 
-/** Every header name the engine recognises, for `#include <` completion. */
+/**
+ * @brief Retrieves every header name recognized by the fast engine for completion and resolution.
+ * @return Sorted array of unique header names including built-in headers, C++ native headers, and aliases.
+ */
 export function knownHeaderNames(): readonly string[] {
-  return [...new Set([...BUILTIN_HEADERS.keys(), ...CPP_NATIVE_HEADERS])].sort();
+  return [...new Set([...BUILTIN_HEADERS.keys(), ...CPP_NATIVE_HEADERS, ...CPP_HEADER_ALIASES.keys()])].sort();
 }
 
-/** True for a header whose content is an alias of another built-in header. */
+/**
+ * @brief Resolves whether a header name is a C++ wrapper alias for a built-in C header.
+ * @param name Header name written in `#include <...>` (e.g. 'cstddef', 'cstdio').
+ * @return Target built-in header name if it aliases a valid C header, or undefined.
+ */
 export function headerAliasTarget(name: string): string | undefined {
   const target = CPP_HEADER_ALIASES.get(name);
   if (target === undefined) return undefined;
-  return BITS_TARGETS.includes(target) ? target : undefined;
+  return BUILTIN_HEADERS.has(target) ? target : undefined;
 }
 
 /**

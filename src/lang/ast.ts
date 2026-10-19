@@ -274,6 +274,8 @@ export interface FunctionDeclNode extends Node {
   readonly storage: readonly StorageClass[];
   /** Absent for a prototype. */
   readonly body?: CompoundStmt;
+  readonly isConstructor?: boolean;
+  readonly isDestructor?: boolean;
 }
 
 export interface UnknownDeclNode extends Node {

@@ -368,8 +368,10 @@ class Preprocessor {
     const eof = this.work[this.work.length - 1];
     if (eof) this.output.push(eof);
 
+    const tokens = concatenateAdjacentStrings(this.output);
+
     return {
-      tokens: this.output,
+      tokens,
       diagnostics: this.diagnostics,
       macros: this.macros,
       sources: this.sources,
@@ -1155,6 +1157,59 @@ function sameMacro(
 
 function renderTokens(tokens: readonly Token[]): string {
   return tokens.map((token) => token.text).join(' ');
+}
+
+/**
+ * @brief Merges adjacent string literal tokens as mandated by C/C++ translation phase 6.
+ * @details Traverses the preprocessed token sequence and concatenates consecutive tokens
+ *          of kind 'string' into a single string token with merged text and decoded value.
+ * @param tokens Input sequence of preprocessed tokens.
+ * @return Token array where consecutive string literals have been concatenated.
+ */
+function concatenateAdjacentStrings(tokens: readonly Token[]): Token[] {
+  const result: Token[] = [];
+  let i = 0;
+  while (i < tokens.length) {
+    const current = tokens[i];
+    if (!current) break;
+    if (current.kind !== 'string') {
+      result.push(current);
+      i += 1;
+      continue;
+    }
+
+    let combinedValue = current.value ?? '';
+    let endPos = current.end;
+    let nextIdx = i + 1;
+
+    while (nextIdx < tokens.length) {
+      const nextTok = tokens[nextIdx];
+      if (!nextTok || nextTok.kind !== 'string') break;
+      combinedValue += nextTok.value ?? '';
+      endPos = nextTok.end;
+      nextIdx += 1;
+    }
+
+    if (nextIdx > i + 1) {
+      result.push({
+        kind: 'string',
+        text: JSON.stringify(combinedValue),
+        value: combinedValue,
+        start: current.start,
+        end: endPos,
+        atLineStart: current.atLineStart,
+        hasLeadingSpace: current.hasLeadingSpace,
+        includeDepth: current.includeDepth,
+        file: current.file,
+        fromMacro: current.fromMacro,
+      });
+      i = nextIdx;
+    } else {
+      result.push(current);
+      i += 1;
+    }
+  }
+  return result;
 }
 
 export function preprocess(

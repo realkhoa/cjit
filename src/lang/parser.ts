@@ -125,6 +125,7 @@ class Parser {
   private index = 0;
   private readonly diagnostics: Diagnostic[] = [];
   private readonly typedefs = new Set<string>(BUILTIN_TYPE_NAMES);
+  private readonly concepts = new Set<string>();
   private readonly tags = new Set<string>();
   /** Set by `using namespace std;`, so bare standard type names parse. */
   private usingNamespaceStd = false;
@@ -374,18 +375,24 @@ class Parser {
         this.advance();
         continue;
       }
-      if (!inDefaultArg && (token.text === 'typename' || token.text === 'class' || this.typedefs.has(token.text))) {
+      if (!inDefaultArg && (token.text === 'typename' || token.text === 'class' || this.concepts.has(token.text))) {
         expectParameter = true;
         this.advance();
         continue;
       }
-      if (!inDefaultArg && expectParameter && (token.kind === 'identifier' || token.kind === 'keyword')) {
-        // The parameter is a type name from here on: `T total{};` must parse.
-        this.typedefs.add(token.text);
-        params.push(token.text);
-        expectParameter = false;
-        this.advance();
-        continue;
+      if (!inDefaultArg && expectParameter) {
+        if (token.text === '...') {
+          this.advance();
+          continue;
+        }
+        if (token.kind === 'identifier' || token.kind === 'keyword') {
+          // The parameter is a type name from here on: `T total{};` must parse.
+          this.typedefs.add(token.text);
+          params.push(token.text);
+          expectParameter = false;
+          this.advance();
+          continue;
+        }
       }
       this.advance();
     }
@@ -631,6 +638,19 @@ class Parser {
           continue;
         }
 
+        // Member template: `template <typename T> void method(...)`
+        if (this.check('template')) {
+          this.parseTemplateHeader();
+          continue;
+        }
+
+        let isExplicit = false;
+        let ctorIndex = this.index;
+        if (this.check('explicit')) {
+          isExplicit = true;
+          ctorIndex += 1;
+        }
+
         /*
          * A constructor or destructor has no return type, so `Counter(...)` cannot go
          * through the specifier path: it would read `Counter` as an unknown type name
@@ -639,19 +659,139 @@ class Parser {
          */
         if (tag !== undefined) {
           const bareTag = tag.slice(tag.lastIndexOf('::') + 1);
-          const isDestructor = this.check('~') && this.tokenAt(this.index + 1)?.text === bareTag;
-          const isConstructor = !isDestructor && this.check(bareTag) && this.tokenAt(this.index + 1)?.text === '(';
+          const isDestructor = !isExplicit && this.check('~') && this.tokenAt(this.index + 1)?.text === bareTag;
+          const isConstructor =
+            !isDestructor &&
+            this.tokenAt(ctorIndex)?.text === bareTag &&
+            this.tokenAt(ctorIndex + 1)?.text === '(';
 
           if (isConstructor || isDestructor) {
             const memberStart = this.peek().start;
+            if (isExplicit) this.advance();
             if (isDestructor) this.advance();
             this.advance();
             // `parseParameterList` starts after the `(`, as it does for a function.
             this.expect('(', "expected '(' after the constructor name");
             const parsed = this.parseParameterList();
+
+            while (this.check('const') || this.check('noexcept') || this.check('throw')) {
+              this.advance();
+            }
+
+            // Member initializer list: `: field(val), ...`
+            const initStatements: Statement[] = [];
+            if (this.check(':')) {
+              this.advance();
+              while (!this.atEnd() && !this.check(';') && !this.check('{')) {
+                if (this.isNameToken(this.peek())) {
+                  const memberToken = this.advance();
+                  let argExpr: Expression | undefined;
+                  if (this.check('(')) {
+                    this.advance();
+                    const args: Expression[] = [];
+                    while (!this.atEnd() && !this.check(')')) {
+                      args.push(this.parseAssignmentExpression());
+                      if (this.check(',')) {
+                        this.advance();
+                        continue;
+                      }
+                      break;
+                    }
+                    this.expect(')', "expected ')' to close member initializer");
+                    if (args.length === 1) {
+                      argExpr = args[0];
+                    } else if (args.length > 1) {
+                      argExpr = {
+                        kind: 'init-list',
+                        items: args,
+                        start: memberToken.start,
+                        end: this.previousEnd(),
+                      };
+                    }
+                  } else if (this.check('{')) {
+                    this.advance();
+                    const args: Expression[] = [];
+                    while (!this.atEnd() && !this.check('}')) {
+                      args.push(this.parseAssignmentExpression());
+                      if (this.check(',')) {
+                        this.advance();
+                        continue;
+                      }
+                      break;
+                    }
+                    this.expect('}', "expected '}' to close member initializer");
+                    if (args.length === 1) {
+                      argExpr = args[0];
+                    } else if (args.length > 1) {
+                      argExpr = {
+                        kind: 'init-list',
+                        items: args,
+                        start: memberToken.start,
+                        end: this.previousEnd(),
+                      };
+                    }
+                  }
+                  if (argExpr) {
+                    initStatements.push({
+                      kind: 'expr-stmt',
+                      expression: {
+                        kind: 'assign',
+                        operator: '=',
+                        target: {
+                          kind: 'identifier',
+                          name: memberToken.text,
+                          start: memberToken.start,
+                          end: memberToken.end,
+                        },
+                        value: argExpr,
+                        start: memberToken.start,
+                        end: argExpr.end,
+                      },
+                      start: memberToken.start,
+                      end: argExpr.end,
+                    });
+                  }
+                }
+                if (this.check(',')) {
+                  this.advance();
+                } else if (!this.check('{') && !this.check(';')) {
+                  this.advance();
+                }
+              }
+            }
+
+            let isDefaulted = false;
+            if (this.check('=')) {
+              this.advance();
+              if (this.check('default')) {
+                isDefaulted = true;
+                this.advance();
+              } else if (this.check('0') || this.check('delete')) {
+                this.advance();
+              }
+            }
+
             let body: CompoundStmt | undefined;
-            if (this.check('{')) body = this.parseCompound();
-            else this.consumeOptionalSemicolon();
+            if (this.check('{')) {
+              body = this.parseCompound();
+            } else if (isDefaulted) {
+              this.consumeOptionalSemicolon();
+              body = {
+                kind: 'compound',
+                items: [],
+                start: memberStart,
+                end: this.previousEnd(),
+              };
+            } else {
+              this.consumeOptionalSemicolon();
+            }
+
+            if (body && initStatements.length > 0) {
+              body = {
+                ...body,
+                items: [...initStatements, ...body.items],
+              };
+            }
             methods.push({
               name: isDestructor ? `~${bareTag}` : bareTag,
               // A constructor has no return type; the class's own type stands in, so the
@@ -880,12 +1020,16 @@ class Parser {
     }
 
     const next = this.tokenAt(this.index + 1);
-    const parenthesized = this.check('(') && (next?.text === '*' || next?.text === '(');
+    const parenthesized =
+      this.check('(') &&
+      (next?.text === '*' || next?.text === '&' || next?.text === '&&' || next?.text === '(');
 
     if (parenthesized) {
       this.advance(); // (
       let innerPointers = 0;
-      while (this.check('*') || this.check('&')) {
+      let isInnerRef = false;
+      while (this.check('*') || this.check('&') || this.check('&&')) {
+        if (this.check('&') || this.check('&&')) isInnerRef = true;
         innerPointers += 1;
         this.advance();
       }
@@ -915,10 +1059,28 @@ class Parser {
           start,
           end: params.end,
         };
+      } else if (this.check('[')) {
+        while (this.check('[')) {
+          const open = this.advance();
+          let length: Expression | undefined;
+          if (!this.check(']')) length = this.parseAssignmentExpression();
+          const close = this.expect(']', "expected ']' to close the array declarator");
+          type = {
+            kind: 'array',
+            name: `${type.name}[]`,
+            qualifiers: [],
+            element: type,
+            ...(length ? { arrayLength: length } : {}),
+            start: open.start,
+            end: close?.end ?? this.previousEnd(),
+          };
+        }
       }
 
       for (let count = 0; count < innerPointers; count += 1) {
-        type = this.wrapPointer(type, start, this.previousEnd());
+        type = isInnerRef
+          ? this.wrapReference(type, start, this.previousEnd())
+          : this.wrapPointer(type, start, this.previousEnd());
       }
 
       return { name, type };
@@ -944,23 +1106,46 @@ class Parser {
     } else if (this.isNameToken(this.peek())) {
       name = this.advance().text;
 
+      while ((this.check('<') && !name.endsWith('operator')) || this.check('::')) {
+        if (this.check('<')) {
+          this.templateArgumentsText();
+        }
+        if (this.check('::')) {
+          this.advance();
+          const part = this.peek();
+          if (part && (this.isNameToken(part) || part.text === 'operator' || part.text === '~')) {
+            if (part.text === '~') {
+              this.advance();
+              const dtorName = this.peek();
+              name += `::~${dtorName?.text ?? ''}`;
+              this.advance();
+            } else {
+              name += `::${part.text}`;
+              this.advance();
+            }
+          } else {
+            break;
+          }
+        }
+      }
+
       /*
        * `Number operator+(Number a, Number b)`: the declared name is the operator itself,
        * so it is read as one name - `operator+` - which is what a call then looks up.
        */
-      if (name === 'operator') {
+      if (name.endsWith('operator') || name === 'operator') {
         const symbol = this.peek();
         if (symbol.text === '[' && this.tokenAt(this.index + 1)?.text === ']') {
           this.advance();
           this.advance();
-          name = 'operator[]';
+          name += '[]';
         } else if (symbol.text === '(' && this.tokenAt(this.index + 1)?.text === ')') {
           this.advance();
           this.advance();
-          name = 'operator()';
+          name += '()';
         } else if (symbol.kind === 'punctuator' || symbol.text.endsWith('=')) {
           this.advance();
-          name = `operator${symbol.text}`;
+          name += symbol.text;
         }
       }
     }
@@ -1063,6 +1248,27 @@ class Parser {
       return false;
     }
 
+    // Keywords that can only start expressions, never parameter declarations: `(new T())`, `(sizeof(T))`
+    if (
+      [
+        'new',
+        'delete',
+        'sizeof',
+        'alignof',
+        'typeid',
+        'true',
+        'false',
+        'nullptr',
+        'this',
+        'static_cast',
+        'dynamic_cast',
+        'reinterpret_cast',
+        'const_cast',
+      ].includes(first.text)
+    ) {
+      return false;
+    }
+
     const second = this.tokenAt(this.index + 2);
 
     // Expressions accessing properties or methods: `(values.size())`, `(ptr->func())`
@@ -1072,13 +1278,21 @@ class Parser {
 
     // Function calls on objects/functions: `(func(x))`
     if (second !== undefined && second.text === '(' && !BUILTIN_TYPE_KEYWORDS.has(first.text)) {
-      return false;
+      const third = this.tokenAt(this.index + 3);
+      const isKnownType =
+        this.typedefs.has(first.text) ||
+        this.isKnownTagName(first.text) ||
+        STD_TYPE_NAMES.has(first.text) ||
+        BUILTIN_TYPE_NAMES.has(first.text);
+      if (!isKnownType || (third?.text !== '*' && third?.text !== '&' && third?.text !== '&&')) {
+        return false;
+      }
     }
 
     // Qualified type or template type parameter: `(std::string s)` or `(vector<int> v)`
     if (first.text === 'std' && second?.text === '::') {
       const third = this.tokenAt(this.index + 3);
-      if (third !== undefined && STD_TYPE_NAMES.has(third.text)) return true;
+      if (third !== undefined && (STD_TYPE_NAMES.has(third.text) || BUILTIN_TYPE_NAMES.has(third.text))) return true;
       return false;
     }
 
@@ -1098,7 +1312,12 @@ class Parser {
     }
 
     // A known typedef or struct tag followed by declarator characters
-    if (this.typedefs.has(first.text) || this.isKnownTagName(first.text) || STD_TYPE_NAMES.has(first.text)) {
+    if (
+      this.typedefs.has(first.text) ||
+      this.isKnownTagName(first.text) ||
+      STD_TYPE_NAMES.has(first.text) ||
+      BUILTIN_TYPE_NAMES.has(first.text)
+    ) {
       if (
         second !== undefined &&
         (this.isNameToken(second) || second.text === '*' || second.text === '&' || second.text === '<')
@@ -1107,6 +1326,12 @@ class Parser {
       }
       if (second !== undefined && (second.text === ')' || second.text === ',')) {
         return true;
+      }
+      if (second?.text === '(') {
+        const third = this.tokenAt(this.index + 3);
+        if (third?.text === '*' || third?.text === '&' || third?.text === '&&') {
+          return true;
+        }
       }
     }
 
@@ -1174,6 +1399,203 @@ class Parser {
 
     const close = this.expect(')', "expected ')' to close the parameter list");
     return { params, variadic, end: close?.end ?? this.previousEnd() };
+  }
+
+  /**
+   * @brief Detects whether an out-of-class constructor or destructor definition follows.
+   * @details Matches patterns like `ClassName::ClassName(...)`, `ClassName<...>::ClassName(...)`,
+   * or `ClassName::~ClassName(...)`. Scans through namespace qualifications and template argument
+   * brackets to verify the trailing member matches the class tag name or destructor tilde prefix.
+   * @return True if the token stream ahead matches an out-of-class constructor or destructor.
+   */
+  private isOutOfClassConstructorOrDestructorAhead(): boolean {
+    let offset = 0;
+    let lastNameToken: Token | undefined;
+    while (this.index + offset < this.tokens.length) {
+      const tok = this.tokenAt(this.index + offset);
+      if (!this.isNameToken(tok)) return false;
+      lastNameToken = tok;
+      offset += 1;
+      if (this.tokenAt(this.index + offset)?.text === '<') {
+        offset += 1;
+        let depth = 1;
+        while (depth > 0 && this.index + offset < this.tokens.length) {
+          const t = this.tokens[this.index + offset]?.text;
+          if (t === '<') depth += 1;
+          else if (t === '>') depth -= 1;
+          else if (t === '>>') depth -= 2;
+          else if (t === ';' || t === '{') return false;
+          offset += 1;
+        }
+      }
+      if (this.tokenAt(this.index + offset)?.text !== '::') return false;
+      offset += 1;
+      let isDestructor = false;
+      if (this.tokenAt(this.index + offset)?.text === '~') {
+        isDestructor = true;
+        offset += 1;
+      }
+      const member = this.tokenAt(this.index + offset);
+      if (member !== undefined && this.isNameToken(member) && lastNameToken !== undefined) {
+        if (
+          (isDestructor || member.text === lastNameToken.text) &&
+          this.tokenAt(this.index + offset + 1)?.text === '('
+        ) {
+          return true;
+        }
+      } else {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @brief Parses an out-of-class constructor or destructor definition.
+   * @details Consumes the qualified name, parameter list, optional constructor initializer list,
+   * and body. Synthesizes member initialization expressions into the front of the body compound
+   * statement to ensure member initializers execute upon instance creation.
+   * @return An array containing the single synthesized FunctionDeclNode.
+   */
+  private parseOutOfClassConstructorOrDestructor(): Declaration[] {
+    const startPos = this.peek().start;
+    let qualifiedName = '';
+    let isDestructor = false;
+
+    for (;;) {
+      const part = this.advance();
+      qualifiedName += part.text;
+      if (this.check('<')) {
+        qualifiedName += `<${this.templateArgumentsText()}>`;
+      }
+      if (!this.check('::')) break;
+      qualifiedName += '::';
+      this.advance();
+      if (this.check('~')) {
+        isDestructor = true;
+        this.advance();
+        qualifiedName += '~';
+      }
+    }
+
+    this.expect('(', "expected '('");
+    const params = this.parseParameterList();
+
+    const initStatements: Statement[] = [];
+    if (this.check(':')) {
+      this.advance();
+      for (;;) {
+        const member = this.advance();
+        const args: Expression[] = [];
+        if (this.check('(')) {
+          this.advance();
+          if (!this.check(')')) {
+            for (;;) {
+              args.push(this.parseAssignmentExpression());
+              if (this.check(',')) {
+                this.advance();
+                continue;
+              }
+              break;
+            }
+          }
+          this.expect(')', "expected ')' to close initializer");
+        } else if (this.check('{')) {
+          this.advance();
+          if (!this.check('}')) {
+            for (;;) {
+              args.push(this.parseAssignmentExpression());
+              if (this.check(',')) {
+                this.advance();
+                continue;
+              }
+              break;
+            }
+          }
+          this.expect('}', "expected '}' to close initializer");
+        }
+        if (args.length > 0) {
+          initStatements.push({
+            kind: 'expr-stmt',
+            expression: {
+              kind: 'assign',
+              operator: '=',
+              target: {
+                kind: 'member',
+                object: { kind: 'identifier', name: 'this', start: member.start, end: member.end },
+                property: member.text,
+                arrow: true,
+                start: member.start,
+                end: member.end,
+              },
+              value:
+                args.length === 1
+                  ? args[0]!
+                  : {
+                      kind: 'comma',
+                      items: args,
+                      start: args[0]!.start,
+                      end: args[args.length - 1]!.end,
+                    },
+              start: member.start,
+              end: this.previousEnd(),
+            },
+            start: member.start,
+            end: this.previousEnd(),
+          });
+        }
+        if (this.check(',')) {
+          this.advance();
+          continue;
+        }
+        break;
+      }
+    }
+
+    let body: CompoundStmt | undefined;
+    if (this.check('{')) {
+      body = this.parseCompound();
+      if (initStatements.length > 0) {
+        body = {
+          ...body,
+          items: [...initStatements, ...body.items],
+        };
+      }
+    } else if (this.check('=')) {
+      this.advance();
+      if (this.check('default') || this.check('delete')) {
+        this.advance();
+      }
+      body = { kind: 'compound', items: [], start: startPos, end: this.previousEnd() };
+      this.consumeOptionalSemicolon();
+    } else {
+      this.consumeOptionalSemicolon();
+    }
+
+    const returnType: TypeRef = {
+      kind: 'builtin',
+      name: 'void',
+      qualifiers: [],
+      start: startPos,
+      end: this.previousEnd(),
+    };
+
+    this.pendingTemplateParams = [];
+
+    return [
+      {
+        kind: 'function',
+        name: qualifiedName,
+        returnType,
+        params: params.params,
+        variadic: params.variadic,
+        storage: [],
+        ...(body ? { body } : {}),
+        ...(isDestructor ? { isDestructor: true } : { isConstructor: true }),
+        start: startPos,
+        end: this.previousEnd(),
+      },
+    ];
   }
 
   // -------------------------------------------------------- declarations
@@ -1247,6 +1669,7 @@ class Parser {
       if (this.isNameToken(this.peek())) {
         const conceptName = this.advance().text;
         this.typedefs.add(conceptName);
+        this.concepts.add(conceptName);
       }
       this.skipToStatementEnd();
       if (this.check(';')) this.advance();
@@ -1265,6 +1688,9 @@ class Parser {
     }
 
     this.skipAttributes();
+    if (this.isOutOfClassConstructorOrDestructorAhead()) {
+      return this.parseOutOfClassConstructorOrDestructor();
+    }
     const spec = this.parseDeclarationSpecifiers();
     if (!spec.consumed) {
       const token = this.peek();
@@ -1359,6 +1785,7 @@ class Parser {
       }
     }
 
+    this.pendingTemplateParams = [];
     return out;
   }
 
@@ -1804,9 +2231,61 @@ class Parser {
     return false;
   }
 
+  /**
+   * @brief Determines whether the upcoming tokens form a C-style type cast `(type) expr`.
+   * @details Distinguishes C-style casts from parenthesized expressions like `(float(x) + 1)`
+   *          or `(x + y)` by scanning ahead to the closing parenthesis and ensuring only
+   *          valid type tokens appear inside, and that functional cast syntax is excluded.
+   * @return True if upcoming tokens are a C-style cast, false otherwise.
+   */
   private isCastAhead(): boolean {
     if (!this.check('(')) return false;
-    return this.isTypeStartToken(this.tokenAt(this.index + 1));
+    const first = this.tokenAt(this.index + 1);
+    if (!first || !this.isTypeStartToken(first)) return false;
+
+    // Check for functional cast like `(float(x) ...)`
+    const second = this.tokenAt(this.index + 2);
+    if (second?.text === '(') {
+      const third = this.tokenAt(this.index + 3);
+      if (third?.text !== '*' && third?.text !== '&') {
+        return false;
+      }
+    }
+
+    // Scan forward to find the matching ')' at depth 0
+    let depth = 1;
+    let scanIdx = this.index + 1;
+    let hasBinaryOp = false;
+
+    while (scanIdx < this.tokens.length) {
+      const tok = this.tokens[scanIdx];
+      if (!tok) break;
+      if (tok.text === '(') {
+        depth += 1;
+      } else if (tok.text === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      } else if (depth === 1) {
+        // Operators that can never appear in a type name at top-level of the cast
+        if (['+', '-', '/', '%', '==', '!=', '<=', '>=', '&&', '||', '?', ':', '=', '+=', '-='].includes(tok.text)) {
+          hasBinaryOp = true;
+          break;
+        }
+      }
+      scanIdx += 1;
+    }
+
+    if (hasBinaryOp || depth !== 0) return false;
+
+    // After the closing ')', a cast must be followed by an expression, not a binary operator or delimiter
+    const afterClose = this.tokenAt(scanIdx + 1);
+    if (afterClose) {
+      if ([';', ',', ')', ']', '}', '=', '+=', '-=', '*=', '/=', '==', '!=', '<=', '>=', '&&', '||'].includes(afterClose.text)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private parseUnaryExpression(): Expression {
@@ -2092,6 +2571,17 @@ class Parser {
     if (!this.isNameToken(first)) return false;
     const cursor = this.qualifiedNameEnd(this.index);
     if (this.tokenAt(cursor)?.text !== '<') return false;
+    const isQualified = cursor > this.index + 1;
+    const isKnown =
+      isQualified ||
+      this.isKnownTagName(first.text) ||
+      this.typedefs.has(first.text) ||
+      STD_TYPE_NAMES.has(first.text) ||
+      first.text === 'vector' ||
+      first.text === 'array' ||
+      first.text === 'pair' ||
+      first.text === 'tuple';
+    if (!isKnown) return false;
     return this.templateCloses(cursor);
   }
 
@@ -2171,7 +2661,13 @@ class Parser {
             after.text === '='
           );
         }
-      } else if (token.text === ';' || token.text === '{' || token.text === '}') {
+      } else if (
+        token.text === ';' ||
+        token.text === '{' ||
+        token.text === '}' ||
+        token.text === '||' ||
+        token.text === '&&'
+      ) {
         return false;
       }
     }
